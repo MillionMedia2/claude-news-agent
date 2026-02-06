@@ -1,0 +1,18 @@
+{
+  "name": "claude-news-agent",
+  "version": "1.0.0",
+  "description": "Automated article generation pipeline for Plantz.io",
+  "type": "module",
+  "scripts": {
+    "generate": "node scripts/generate-article.js",
+    "publish": "node scripts/publish-to-wordpress.js",
+    "test": "node scripts/test-connection.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@pinecone-database/pinecone": "^2.0.0",
+    "airtable": "^0.12.2"
+  },
+  "author": "Plantz.io",
+  "license": "MIT"
+}
