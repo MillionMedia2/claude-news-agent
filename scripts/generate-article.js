@@ -6,7 +6,7 @@
  * 2. Queries Pinecone for evidence
  * 3. Calls Claude API to generate the article
  * 4. Updates Airtable with the generated content
- * 5. If post_to_wordpress is checked, publishes to WordPress
+ * 5. If post_to_wordpress is checked, publishes to WordPress (with featured image)
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -50,55 +50,6 @@ async function getPendingArticles() {
         (err) => err ? reject(err) : resolve(records)
       );
   });
-}
-
-/**
- * Query Pinecone for evidence related to the article topic
- */
-async function queryPinecone(searchText) {
-  try {
-    const index = pinecone.index(CONFIG.pinecone.indexName);
-    
-    // Create embedding using Pinecone's inference
-    const response = await index.namespace(CONFIG.pinecone.namespace).query({
-      topK: 10,
-      includeMetadata: true,
-      vector: await getEmbedding(searchText)
-    });
-    
-    return response.matches.map(match => match.metadata?.text || '').join('\n\n');
-  } catch (error) {
-    console.error('Pinecone query error:', error);
-    return '';
-  }
-}
-
-/**
- * Get embedding for search text using Anthropic
- * Note: In production, use Pinecone's built-in inference or OpenAI embeddings
- */
-async function getEmbedding(text) {
-  // For now, we'll use Pinecone's query by text feature
-  // This is a placeholder - Pinecone's inference API handles this
-  const index = pinecone.index(CONFIG.pinecone.indexName);
-  
-  // Use Pinecone's inference to search by text directly
-  const response = await fetch(`https://${CONFIG.pinecone.indexName}-aokppsg.svc.gcp-europe-west4-de1d.pinecone.io/query`, {
-    method: 'POST',
-    headers: {
-      'Api-Key': process.env.PINECONE_API_KEY,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      namespace: CONFIG.pinecone.namespace,
-      topK: 10,
-      includeMetadata: true,
-      inputs: { text: text }
-    })
-  });
-  
-  const data = await response.json();
-  return data.matches?.map(m => m.metadata?.text || '').join('\n\n') || '';
 }
 
 /**
@@ -238,6 +189,52 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
 }
 
 /**
+ * Upload featured image to WordPress Media Library
+ */
+async function uploadFeaturedImage(imageUrl, title, authHeader) {
+  try {
+    console.log('   📸 Downloading image from Airtable...');
+    
+    // Download image from Airtable
+    const imageResponse = await fetch(imageUrl);
+    if (!imageResponse.ok) {
+      throw new Error(`Failed to download image: ${imageResponse.status}`);
+    }
+    
+    const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
+    
+    // Create slug for filename
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 50);
+    
+    console.log('   📤 Uploading to WordPress Media Library...');
+    
+    // Upload to WordPress
+    const uploadResponse = await fetch(`${CONFIG.wordpress.baseUrl}${CONFIG.wordpress.apiPath}/media`, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Disposition': `attachment; filename="${slug}.jpg"`,
+        'Content-Type': 'image/jpeg'
+      },
+      body: imageBuffer
+    });
+    
+    if (!uploadResponse.ok) {
+      const errorText = await uploadResponse.text();
+      throw new Error(`Image upload failed: ${uploadResponse.status} - ${errorText}`);
+    }
+    
+    const mediaData = await uploadResponse.json();
+    console.log(`   ✅ Image uploaded: ID ${mediaData.id}`);
+    
+    return mediaData.id;
+  } catch (error) {
+    console.error('   ⚠️ Featured image upload failed:', error.message);
+    return null; // Continue without image rather than failing entirely
+  }
+}
+
+/**
  * Publish to WordPress if approved
  */
 async function publishToWordPress(record) {
@@ -256,6 +253,13 @@ async function publishToWordPress(record) {
   }
   
   const authHeader = `Basic ${Buffer.from(`${process.env.WORDPRESS_USER}:${process.env.WORDPRESS_APP_PASSWORD}`).toString('base64')}`;
+  
+  // Upload featured image if available
+  let mediaId = null;
+  if (fields.featured_image && fields.featured_image.length > 0) {
+    const imageUrl = fields.featured_image[0].url;
+    mediaId = await uploadFeaturedImage(imageUrl, fields.article_title, authHeader);
+  }
   
   // Get category IDs
   const categoryIds = await getCategoryIds(fields.categories || ['Natural Remedies'], authHeader);
@@ -277,6 +281,21 @@ async function publishToWordPress(record) {
     return `<p>${para.replace(/\n/g, ' ')}</p>`;
   }).join('\n\n');
   
+  // Build post data
+  const postData = {
+    title: fields.article_title,
+    content: content,
+    excerpt: fields.claude_post_extract || '',
+    status: 'publish',
+    categories: categoryIds,
+    tags: tagIds
+  };
+  
+  // Add featured image if uploaded successfully
+  if (mediaId) {
+    postData.featured_media = mediaId;
+  }
+  
   // Create post
   const postResponse = await fetch(`${CONFIG.wordpress.baseUrl}${CONFIG.wordpress.apiPath}/posts`, {
     method: 'POST',
@@ -284,14 +303,7 @@ async function publishToWordPress(record) {
       'Authorization': authHeader,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      title: fields.article_title,
-      content: content,
-      excerpt: fields.claude_post_extract || '',
-      status: 'publish',
-      categories: categoryIds,
-      tags: tagIds
-    })
+    body: JSON.stringify(postData)
   });
   
   if (!postResponse.ok) {
