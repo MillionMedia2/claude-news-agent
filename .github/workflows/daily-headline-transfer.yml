@@ -37,4 +37,4 @@ jobs:
           fi
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
-          DISCORD_WEBHOOK_NOTIFICATIONS: ${{ secrets.DISCORD_WEBHOOK_NOTIFICATIONS }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
