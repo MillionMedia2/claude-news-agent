@@ -1,45 +1,24 @@
-name: Generate Article from Airtable Queue
+name: Generate Articles
 
 on:
-  # Manual trigger
-  workflow_dispatch:
-    inputs:
-      force_run:
-        description: 'Run even if no articles in queue'
-        required: false
-        default: 'false'
-  
-  # Scheduled trigger - 1pm UK GMT (13:00 UTC)
   schedule:
-    - cron: '0 13 * * *'
+    # Run at 07:00 UTC daily (2hrs after headline transfer)
+    - cron: '0 7 * * *'
+  workflow_dispatch:
 
 jobs:
   generate:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      
-      - name: Install dependencies
-        run: npm install
-      
-      - name: Check Airtable queue and generate article
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run generate
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
-          WORDPRESS_USER: ${{ secrets.WORDPRESS_USER }}
-          WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
-        run: node scripts/generate-article.js
-      
-      - name: Report results
-        if: always()
-        run: |
-          echo "Workflow completed at $(date)"
-          echo "Check Airtable for updated records"
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
