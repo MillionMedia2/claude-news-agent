@@ -35,7 +35,7 @@ if env_path.exists():
 
 # ── Config ──────────────────────────────────────────────────────────────────
 AIRTABLE_API_KEY = os.environ.get("AIRTABLE_API_KEY")
-DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_NOTIFICATIONS")
+DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL")
 
 BASE_ID = "appN9kmTgJbjel4J1"
 HEADLINE_TABLE = "tbl00YTHfrVnKQQai"
