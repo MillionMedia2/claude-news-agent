@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-Plantz Editorial Pipeline — Stage 1: Transfer Approved Headlines
+Plantz Editorial Pipeline — Transfer Approved Headlines (v3)
 
 Scans the Headline Queue for approved headlines and creates corresponding
 records in the Articles table. Updates the Headline Queue status to
 'sent_to_news_agent' and stores the cross-reference ID.
 
+v3 changes:
+  - Adds priority_order mapping
+  - Does NOT map Publication Date (human sets it during review)
+
 Runs as:
-  - GitHub Actions cron (05:00 UTC daily) — uses secrets for env vars
+  - GitHub Actions (triggered by Zapier or manual dispatch)
   - Locally — auto-loads .env from project root
 
 Usage:
@@ -130,7 +134,7 @@ def notify_discord(message, color=5814783):
 
 def main():
     print("=" * 60)
-    print("PLANTZ EDITORIAL PIPELINE — Headline Transfer")
+    print("PLANTZ EDITORIAL PIPELINE v3 — Headline Transfer")
     print(f"Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
     if DRY_RUN:
         print("MODE: DRY RUN (no changes will be made)")
@@ -153,8 +157,7 @@ def main():
     for rec in approved:
         f = rec["fields"]
         print(f"    • {f.get('headline', '(no title)')}")
-        print(f"      Date: {f.get('publish_date', 'N/A')} | "
-              f"Angle: {f.get('angle', 'N/A')} | "
+        print(f"      Angle: {f.get('angle', 'N/A')} | "
               f"Subject: {f.get('subject', 'N/A')}")
 
     if DRY_RUN:
@@ -163,8 +166,7 @@ def main():
             f = rec["fields"]
             title = f.get("headline", "")
             print(f"    → {title[:70]}{'...' if len(title) > 70 else ''}")
-            print(f"      pipeline_status: queued | "
-                  f"Publication Date: {f.get('publish_date', 'N/A')}")
+            print(f"      pipeline_status: queued")
         print("\n  No changes made. Remove --dry-run to execute.")
         return
 
@@ -180,11 +182,13 @@ def main():
             "seo_keyword": f.get("seo_keyword", ""),
             "angle": f.get("angle", ""),
             "subject": f.get("subject", ""),
-            "Publication Date": f.get("publish_date", ""),
             "batch_id": f.get("batch_id", ""),
             "target_word_count": f.get("target_word_count", 1000),
             "headline_queue_id": rec["id"],
-            "pipeline_status": "queued"
+            "pipeline_status": "queued",
+            "priority_order": f.get("priority_order", 1)
+            # NOTE: Publication Date is NOT set here.
+            # The human sets it during article review.
         })
 
     created_articles = airtable_batch_create(ARTICLES_TABLE, articles_to_create)
@@ -225,7 +229,7 @@ def main():
     notify_discord(
         f"**📋 {len(created_articles)} headline(s) transferred to Articles queue**\n\n"
         f"{titles}\n\n"
-        f"These are now queued for the News Agent to write."
+        f"The News Agent will write these automatically."
     )
 
 

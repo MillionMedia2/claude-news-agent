@@ -1,0 +1,27 @@
+# Runs daily at 7am UTC to write any queued articles.
+# Also triggered by Zapier after headline transfer,
+# or manually via GitHub Actions UI.
+
+name: Generate Articles
+
+on:
+  schedule:
+    - cron: '0 7 * * *'  # 7am UTC daily (including weekends for catch-up)
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run generate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

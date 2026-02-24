@@ -1,0 +1,27 @@
+# Runs daily at 7am UTC to publish articles whose Publication Date is today.
+# Also triggered by Zapier when post_to_wordpress is ticked,
+# or manually via GitHub Actions UI.
+
+name: Publish Approved Articles
+
+on:
+  schedule:
+    - cron: '0 7 * * *'  # 7am UTC daily
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run publish
+        env:
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          WORDPRESS_USER: ${{ secrets.WORDPRESS_USER }}
+          WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

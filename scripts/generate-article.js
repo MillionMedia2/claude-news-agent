@@ -1,12 +1,17 @@
 /**
- * Plantz News Agent - Article Generation Script
+ * Plantz News Agent - Article Generation Script (v3)
+ * 
+ * Pipeline v3: Write immediately when queued (no date dependency).
+ * Human sets Publication Date later during review.
  * 
  * This script:
- * 1. Checks Airtable for articles with a prompt but no written_article
- * 2. Queries Pinecone for evidence
- * 3. Calls Claude API to generate the article
- * 4. Updates Airtable with the generated content
- * 5. If post_to_wordpress is checked, publishes to WordPress (with featured image)
+ * 1. Checks Airtable for articles with pipeline_status = "queued"
+ * 2. Sets pipeline_status to "writing"
+ * 3. Queries Pinecone for evidence
+ * 4. Calls Claude API to generate the article + supporting content
+ * 5. Updates Airtable with generated content
+ * 6. Sets pipeline_status to "review"
+ * 7. Sends Discord notification
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -23,10 +28,7 @@ const CONFIG = {
     indexName: 'plantz1',
     namespace: 'herb_monographs'
   },
-  wordpress: {
-    baseUrl: 'https://plantz.io',
-    apiPath: '/wp-json/wp/v2'
-  }
+  maxArticlesPerRun: 3
 };
 
 // Initialize clients
@@ -34,16 +36,56 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const airtable = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(CONFIG.airtable.baseId);
 const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 
-/**
- * Get articles from Airtable that have a prompt but no written article
- */
-async function getPendingArticles() {
+// ── Discord ────────────────────────────────────────────────────────────────
+
+async function sendDiscordNotification(message, isError = false) {
+  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  if (!webhookUrl) return;
+  try {
+    await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        embeds: [{
+          title: isError ? '❌ Article Generation Error' : '✅ Article Ready for Review',
+          description: message,
+          color: isError ? 0xFF0000 : 0x58B09C, // Plantz sage green
+          timestamp: new Date().toISOString()
+        }]
+      })
+    });
+  } catch (error) {
+    console.error('Failed to send Discord notification:', error);
+  }
+}
+
+// ── Pipeline Status ────────────────────────────────────────────────────────
+
+async function updatePipelineStatus(recordId, status) {
+  return new Promise((resolve, reject) => {
+    airtable(CONFIG.airtable.tableId).update(recordId, {
+      'pipeline_status': status
+    }, (err, record) => err ? reject(err) : resolve(record));
+  });
+}
+
+// ── Get Queued Articles ────────────────────────────────────────────────────
+// v3: No date check. Write anything that's queued, oldest first.
+
+async function getQueuedArticles() {
   return new Promise((resolve, reject) => {
     const records = [];
     airtable(CONFIG.airtable.tableId)
       .select({
-        maxRecords: 1, // Process one at a time
-        filterByFormula: `AND({prompt} != '', {written_article} = '')`
+        maxRecords: CONFIG.maxArticlesPerRun,
+        filterByFormula: `AND(
+          {pipeline_status} = "queued",
+          {written_article} = '',
+          {prompt} != ''
+        )`,
+        sort: [
+          { field: 'Created', direction: 'asc' }
+        ]
       })
       .eachPage(
         (pageRecords, next) => { records.push(...pageRecords); next(); },
@@ -52,9 +94,8 @@ async function getPendingArticles() {
   });
 }
 
-/**
- * Search Pinecone using the inference API (text-based search)
- */
+// ── Pinecone Search ────────────────────────────────────────────────────────
+
 async function searchPinecone(searchText) {
   try {
     const response = await fetch(
@@ -86,9 +127,8 @@ async function searchPinecone(searchText) {
   }
 }
 
-/**
- * Generate article using Claude API
- */
+// ── Article Generation ─────────────────────────────────────────────────────
+
 async function generateArticle(title, prompt, evidence) {
   const systemPrompt = `You are the Plantz News Agent, writing evidence-based wellness articles for Aisha - a 35-40 year old UK woman who is wellness-curious but skeptical of hype.
 
@@ -126,9 +166,6 @@ Generate the complete article now.`;
   return response.content[0].text;
 }
 
-/**
- * Generate supporting content (tags, excerpt, social posts, etc.)
- */
 async function generateSupportingContent(article, title) {
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
@@ -157,16 +194,18 @@ Return ONLY valid JSON, no markdown.`
   });
 
   try {
-    return JSON.parse(response.content[0].text);
+    let jsonStr = response.content[0].text;
+    if (jsonStr.includes('```json')) jsonStr = jsonStr.split('```json')[1].split('```')[0];
+    else if (jsonStr.includes('```')) jsonStr = jsonStr.split('```')[1].split('```')[0];
+    return JSON.parse(jsonStr.trim());
   } catch (e) {
     console.error('Failed to parse supporting content:', e);
     return {};
   }
 }
 
-/**
- * Update Airtable record with generated content
- */
+// ── Airtable Update ────────────────────────────────────────────────────────
+
 async function updateAirtableRecord(recordId, article, supportingContent) {
   return new Promise((resolve, reject) => {
     airtable(CONFIG.airtable.tableId).update(recordId, {
@@ -179,8 +218,8 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
       'claude_avatar_script': supportingContent.claude_avatar_script || '',
       'claude_image_prompt': supportingContent.claude_image_prompt || '',
       'categories': supportingContent.categories || ['Natural Remedies'],
-      'article_source_name': 'Plantz News Agent (GitHub Actions)',
-      'Publication Date': new Date().toISOString().split('T')[0]
+      'article_source_name': 'Plantz News Agent (GitHub Actions)'
+      // NOTE: Publication Date is NOT set here. Human sets it during review.
     }, (err, record) => {
       if (err) reject(err);
       else resolve(record);
@@ -188,248 +227,98 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
   });
 }
 
-/**
- * Upload featured image to WordPress Media Library
- */
-async function uploadFeaturedImage(imageUrl, title, authHeader) {
-  try {
-    console.log('   📸 Downloading image from Airtable...');
-    
-    // Download image from Airtable
-    const imageResponse = await fetch(imageUrl);
-    if (!imageResponse.ok) {
-      throw new Error(`Failed to download image: ${imageResponse.status}`);
-    }
-    
-    const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-    
-    // Create slug for filename
-    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 50);
-    
-    console.log('   📤 Uploading to WordPress Media Library...');
-    
-    // Upload to WordPress
-    const uploadResponse = await fetch(`${CONFIG.wordpress.baseUrl}${CONFIG.wordpress.apiPath}/media`, {
-      method: 'POST',
-      headers: {
-        'Authorization': authHeader,
-        'Content-Disposition': `attachment; filename="${slug}.jpg"`,
-        'Content-Type': 'image/jpeg'
-      },
-      body: imageBuffer
-    });
-    
-    if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text();
-      throw new Error(`Image upload failed: ${uploadResponse.status} - ${errorText}`);
-    }
-    
-    const mediaData = await uploadResponse.json();
-    console.log(`   ✅ Image uploaded: ID ${mediaData.id}`);
-    
-    return mediaData.id;
-  } catch (error) {
-    console.error('   ⚠️ Featured image upload failed:', error.message);
-    return null; // Continue without image rather than failing entirely
-  }
-}
+// ── Main ───────────────────────────────────────────────────────────────────
 
-/**
- * Publish to WordPress if approved
- */
-async function publishToWordPress(record) {
-  const fields = record.fields;
-  
-  // Check if approved for publishing
-  if (!fields.post_to_wordpress) {
-    console.log('Article not approved for WordPress publishing yet');
-    return null;
-  }
-  
-  // Skip if already published
-  if (fields['Plantz URL']) {
-    console.log('Article already published:', fields['Plantz URL']);
-    return fields['Plantz URL'];
-  }
-  
-  const authHeader = `Basic ${Buffer.from(`${process.env.WORDPRESS_USER}:${process.env.WORDPRESS_APP_PASSWORD}`).toString('base64')}`;
-  
-  // Upload featured image if available
-  let mediaId = null;
-  if (fields.featured_image && fields.featured_image.length > 0) {
-    const imageUrl = fields.featured_image[0].url;
-    mediaId = await uploadFeaturedImage(imageUrl, fields.article_title, authHeader);
-  }
-  
-  // Get category IDs
-  const categoryIds = await getCategoryIds(fields.categories || ['Natural Remedies'], authHeader);
-  
-  // Get/create tag IDs
-  const tagIds = await getTagIds(fields.claude_tags || '', authHeader);
-  
-  // Convert markdown to HTML (basic conversion)
-  let content = fields.written_article || '';
-  content = content.replace(/^# .+\n+/, ''); // Remove H1
-  content = content.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  content = content.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  content = content.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  content = content.replace(/^---$/gm, '<hr />');
-  content = content.split('\n\n').map(para => {
-    para = para.trim();
-    if (!para || para.startsWith('<h') || para.startsWith('<hr')) return para;
-    return `<p>${para.replace(/\n/g, ' ')}</p>`;
-  }).join('\n\n');
-  
-  // Build post data
-  const postData = {
-    title: fields.article_title,
-    content: content,
-    excerpt: fields.claude_post_extract || '',
-    status: 'publish',
-    categories: categoryIds,
-    tags: tagIds
-  };
-  
-  // Add featured image if uploaded successfully
-  if (mediaId) {
-    postData.featured_media = mediaId;
-  }
-  
-  // Create post
-  const postResponse = await fetch(`${CONFIG.wordpress.baseUrl}${CONFIG.wordpress.apiPath}/posts`, {
-    method: 'POST',
-    headers: {
-      'Authorization': authHeader,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(postData)
-  });
-  
-  if (!postResponse.ok) {
-    throw new Error(`WordPress publish failed: ${await postResponse.text()}`);
-  }
-  
-  const post = await postResponse.json();
-  
-  // Update Airtable with URL
-  await new Promise((resolve, reject) => {
-    airtable(CONFIG.airtable.tableId).update(record.id, {
-      'Plantz URL': post.link
-    }, (err) => err ? reject(err) : resolve());
-  });
-  
-  return post.link;
-}
-
-async function getCategoryIds(categoryNames, authHeader) {
-  const response = await fetch(`${CONFIG.wordpress.baseUrl}${CONFIG.wordpress.apiPath}/categories?per_page=100`, {
-    headers: { 'Authorization': authHeader }
-  });
-  const existing = await response.json();
-  
-  return categoryNames.map(name => {
-    const found = existing.find(c => c.name.toLowerCase() === name.toLowerCase());
-    return found?.id;
-  }).filter(Boolean);
-}
-
-async function getTagIds(tagString, authHeader) {
-  if (!tagString) return [];
-  
-  const tagNames = tagString.split(',').map(t => t.trim()).filter(t => t);
-  const ids = [];
-  
-  for (const name of tagNames) {
-    const searchRes = await fetch(
-      `${CONFIG.wordpress.baseUrl}${CONFIG.wordpress.apiPath}/tags?search=${encodeURIComponent(name)}`,
-      { headers: { 'Authorization': authHeader } }
-    );
-    const existing = await searchRes.json();
-    const found = existing.find(t => t.name.toLowerCase() === name.toLowerCase());
-    
-    if (found) {
-      ids.push(found.id);
-    } else {
-      const createRes = await fetch(`${CONFIG.wordpress.baseUrl}${CONFIG.wordpress.apiPath}/tags`, {
-        method: 'POST',
-        headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      });
-      const newTag = await createRes.json();
-      if (newTag.id) ids.push(newTag.id);
-    }
-  }
-  
-  return ids;
-}
-
-/**
- * Main execution
- */
 async function main() {
-  console.log('🚀 Plantz News Agent starting...\n');
+  console.log('🚀 Plantz News Agent v3 starting...');
   console.log(`Timestamp: ${new Date().toISOString()}`);
+  console.log(`Max articles per run: ${CONFIG.maxArticlesPerRun}\n`);
   
   try {
-    // Check for pending articles
-    const pendingArticles = await getPendingArticles();
+    const queuedArticles = await getQueuedArticles();
+    console.log(`📋 Found ${queuedArticles.length} queued article(s)\n`);
     
-    if (pendingArticles.length === 0) {
-      console.log('\n📭 No pending articles in queue. Exiting.');
+    if (queuedArticles.length === 0) {
+      console.log('📭 No queued articles. Exiting.');
       return;
     }
-    
-    const record = pendingArticles[0];
-    const title = record.get('article_title');
-    const prompt = record.get('prompt');
-    
-    console.log(`\n📝 Processing: "${title}"`);
-    
-    // Extract search terms from title and prompt
-    const searchTerms = `${title} ${prompt}`.substring(0, 500);
-    
-    // Query Pinecone for evidence
-    console.log('\n🔍 Querying Pinecone for evidence...');
-    const evidence = await searchPinecone(searchTerms);
-    console.log(`   Found ${evidence.length} characters of evidence`);
-    
-    // Generate article
-    console.log('\n✍️  Generating article with Claude...');
-    const article = await generateArticle(title, prompt, evidence);
-    console.log(`   Generated ${article.length} characters`);
-    
-    // Generate supporting content
-    console.log('\n📦 Generating supporting content...');
-    const supportingContent = await generateSupportingContent(article, title);
-    
-    // Update Airtable
-    console.log('\n💾 Updating Airtable record...');
-    await updateAirtableRecord(record.id, article, supportingContent);
-    console.log('   ✅ Airtable updated');
-    
-    // Check if we should publish
-    const updatedRecord = await new Promise((resolve, reject) => {
-      airtable(CONFIG.airtable.tableId).find(record.id, (err, rec) => {
-        if (err) reject(err);
-        else resolve(rec);
-      });
-    });
-    
-    if (updatedRecord.get('post_to_wordpress')) {
-      console.log('\n🌐 Publishing to WordPress...');
-      const url = await publishToWordPress(updatedRecord);
-      if (url) {
-        console.log(`   ✅ Published: ${url}`);
+
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const record of queuedArticles) {
+      const title = record.get('article_title');
+      const prompt = record.get('prompt');
+      
+      console.log(`📝 Processing: "${title}"`);
+      
+      try {
+        // Mark as writing
+        await updatePipelineStatus(record.id, 'writing');
+        console.log('   📌 Status: writing');
+        
+        // Query Pinecone for evidence
+        const searchTerms = `${title} ${prompt}`.substring(0, 500);
+        console.log('   🔍 Querying Pinecone...');
+        const evidence = await searchPinecone(searchTerms);
+        console.log(`   Found ${evidence.length} chars of evidence`);
+        
+        // Generate article
+        console.log('   ✍️  Generating article...');
+        const article = await generateArticle(title, prompt, evidence);
+        console.log(`   Generated ${article.length} chars`);
+        
+        // Generate supporting content
+        console.log('   📦 Generating supporting content...');
+        const supportingContent = await generateSupportingContent(article, title);
+        
+        // Update Airtable
+        console.log('   💾 Updating Airtable...');
+        await updateAirtableRecord(record.id, article, supportingContent);
+        
+        // Mark as review
+        await updatePipelineStatus(record.id, 'review');
+        console.log('   📌 Status: review');
+        
+        // Discord notification
+        await sendDiscordNotification(
+          `**${title}**\n\n` +
+          `Ready for review in Airtable.\n` +
+          `Categories: ${(supportingContent.categories || []).join(', ')}\n\n` +
+          `_Review the article, upload a featured image, set a Publication Date, and tick ☑ post_to_wordpress._`
+        );
+        
+        successCount++;
+        console.log(`   ✅ Complete!\n`);
+        
+      } catch (error) {
+        errorCount++;
+        console.error(`   ❌ Error: ${error.message}\n`);
+        
+        // Mark as error
+        try {
+          await updatePipelineStatus(record.id, 'error');
+        } catch (statusErr) {
+          console.error(`   ⚠️ Could not update status to error: ${statusErr.message}`);
+        }
+        
+        await sendDiscordNotification(
+          `**Error writing:** ${title}\n\`\`\`${error.message}\`\`\``,
+          true
+        );
       }
-    } else {
-      console.log('\n⏸️  Waiting for human approval (post_to_wordpress not checked)');
+    }
+
+    console.log('━'.repeat(50));
+    console.log(`🎉 Run complete: ${successCount} written, ${errorCount} errors`);
+    
+    if (errorCount > 0) {
+      console.log('⚠️ Some articles had errors — check Discord for details.');
     }
     
-    console.log('\n🎉 Done!');
-    
   } catch (error) {
-    console.error('\n❌ Error:', error);
+    console.error('Fatal error:', error);
+    await sendDiscordNotification(`**Fatal error:**\n\`\`\`${error.message}\`\`\``, true);
     process.exit(1);
   }
 }
