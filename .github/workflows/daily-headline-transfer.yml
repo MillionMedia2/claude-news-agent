@@ -1,40 +1,13 @@
-name: Daily Headline Transfer
+# DEPRECATED: This workflow has been replaced by transfer-headlines.yml
+# Keeping this file to prevent GitHub from showing errors for missing workflow.
+# It will never trigger because it has no events.
+
+name: "[DEPRECATED] Daily Headline Transfer"
 
 on:
-  schedule:
-    # Run at 05:00 UTC daily (before generate-articles at 07:00)
-    - cron: '0 5 * * *'
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: 'Run in dry-run mode (no changes)'
+      note:
+        description: 'This workflow is deprecated. Use transfer-headlines.yml instead.'
         required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
-
-jobs:
-  transfer:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Transfer approved headlines
-        run: |
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            python scripts/transfer_headlines.py --dry-run
-          else
-            python scripts/transfer_headlines.py
-          fi
-        env:
-          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        default: 'deprecated'
