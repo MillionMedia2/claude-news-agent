@@ -12,6 +12,10 @@
  * 5. Updates Airtable with generated content
  * 6. Sets pipeline_status to "review"
  * 7. Sends Discord notification
+ *
+ * Env vars (must match .env naming):
+ *   ANTHROPIC_API_KEY, AIRTABLE_API_KEY, PINECONE_API_KEY,
+ *   DISCORD_WEBHOOK_NOTIFICATIONS
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -39,7 +43,7 @@ const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 // ── Discord ────────────────────────────────────────────────────────────────
 
 async function sendDiscordNotification(message, isError = false) {
-  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  const webhookUrl = process.env.DISCORD_WEBHOOK_NOTIFICATIONS;
   if (!webhookUrl) return;
   try {
     await fetch(webhookUrl, {
@@ -49,7 +53,7 @@ async function sendDiscordNotification(message, isError = false) {
         embeds: [{
           title: isError ? '❌ Article Generation Error' : '✅ Article Ready for Review',
           description: message,
-          color: isError ? 0xFF0000 : 0x58B09C, // Plantz sage green
+          color: isError ? 0xFF0000 : 0x58B09C,
           timestamp: new Date().toISOString()
         }]
       })
@@ -295,7 +299,6 @@ async function main() {
         errorCount++;
         console.error(`   ❌ Error: ${error.message}\n`);
         
-        // Mark as error
         try {
           await updatePipelineStatus(record.id, 'error');
         } catch (statusErr) {

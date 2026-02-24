@@ -9,6 +9,10 @@
  *   - written_article exists
  *
  * After publishing, sets pipeline_status to "published".
+ *
+ * Env vars (must match .env naming):
+ *   AIRTABLE_API_KEY, WORDPRESS_USERNAME, WORDPRESS_APP_PASSWORD,
+ *   DISCORD_WEBHOOK_NOTIFICATIONS
  */
 
 import Airtable from 'airtable';
@@ -21,11 +25,11 @@ const CONFIG = {
 const airtable = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(CONFIG.airtable.baseId);
 
 function getWPAuthHeader() {
-  return `Basic ${Buffer.from(`${process.env.WORDPRESS_USER}:${process.env.WORDPRESS_APP_PASSWORD}`).toString('base64')}`;
+  return `Basic ${Buffer.from(`${process.env.WORDPRESS_USERNAME}:${process.env.WORDPRESS_APP_PASSWORD}`).toString('base64')}`;
 }
 
 async function sendDiscordNotification(message, isError = false) {
-  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  const webhookUrl = process.env.DISCORD_WEBHOOK_NOTIFICATIONS;
   if (!webhookUrl) return;
   try {
     await fetch(webhookUrl, {

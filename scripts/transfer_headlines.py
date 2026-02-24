@@ -10,6 +10,9 @@ v3 changes:
   - Adds priority_order mapping
   - Does NOT map Publication Date (human sets it during review)
 
+Env vars (must match .env naming):
+  AIRTABLE_API_KEY, DISCORD_WEBHOOK_NOTIFICATIONS
+
 Runs as:
   - GitHub Actions (triggered by Zapier or manual dispatch)
   - Locally — auto-loads .env from project root
@@ -39,7 +42,7 @@ if env_path.exists():
 
 # ── Config ──────────────────────────────────────────────────────────────────
 AIRTABLE_API_KEY = os.environ.get("AIRTABLE_API_KEY")
-DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL")
+DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_NOTIFICATIONS")
 
 BASE_ID = "appN9kmTgJbjel4J1"
 HEADLINE_TABLE = "tbl00YTHfrVnKQQai"
