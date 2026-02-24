@@ -6,7 +6,7 @@ name: Generate Articles
 
 on:
   schedule:
-    - cron: '0 7 * * *'  # 7am UTC daily (including weekends for catch-up)
+    - cron: '0 7 * * *'
   workflow_dispatch:
 
 jobs:
@@ -24,4 +24,4 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_NOTIFICATIONS: ${{ secrets.DISCORD_WEBHOOK_NOTIFICATIONS }}

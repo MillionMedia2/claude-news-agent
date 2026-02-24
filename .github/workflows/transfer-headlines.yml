@@ -1,6 +1,5 @@
 # Triggered by Zapier when headlines are approved in Airtable,
 # or manually via GitHub Actions UI.
-# No cron schedule — this is event-driven.
 
 name: Transfer Approved Headlines
 
@@ -21,14 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install dependencies
         run: pip install requests
-
       - name: Transfer approved headlines
         run: |
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
@@ -38,4 +34,4 @@ jobs:
           fi
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_NOTIFICATIONS: ${{ secrets.DISCORD_WEBHOOK_NOTIFICATIONS }}

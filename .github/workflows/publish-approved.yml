@@ -6,7 +6,7 @@ name: Publish Approved Articles
 
 on:
   schedule:
-    - cron: '0 7 * * *'  # 7am UTC daily
+    - cron: '0 7 * * *'
   workflow_dispatch:
 
 jobs:
@@ -22,6 +22,6 @@ jobs:
       - run: npm run publish
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
-          WORDPRESS_USER: ${{ secrets.WORDPRESS_USER }}
+          WORDPRESS_USERNAME: ${{ secrets.WORDPRESS_USERNAME }}
           WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_NOTIFICATIONS: ${{ secrets.DISCORD_WEBHOOK_NOTIFICATIONS }}
