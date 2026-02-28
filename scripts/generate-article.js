@@ -1,8 +1,11 @@
 /**
- * Plantz News Agent - Article Generation Script (v3)
+ * Plantz News Agent - Article Generation Script (v3.1)
  * 
- * Pipeline v3: Write immediately when queued (no date dependency).
+ * Pipeline v3.1: Write immediately when queued (no date dependency).
  * Human sets Publication Date later during review.
+ * 
+ * v3.1 changes:
+ *   - maxArticlesPerRun: 10 (was 3) to handle full Monday batches
  * 
  * This script:
  * 1. Checks Airtable for articles with pipeline_status = "queued"
@@ -32,7 +35,7 @@ const CONFIG = {
     indexName: 'plantz1',
     namespace: 'herb_monographs'
   },
-  maxArticlesPerRun: 3
+  maxArticlesPerRun: 10
 };
 
 // Initialize clients
@@ -234,7 +237,7 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('🚀 Plantz News Agent v3 starting...');
+  console.log('🚀 Plantz News Agent v3.1 starting...');
   console.log(`Timestamp: ${new Date().toISOString()}`);
   console.log(`Max articles per run: ${CONFIG.maxArticlesPerRun}\n`);
   

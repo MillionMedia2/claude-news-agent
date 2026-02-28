@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Plantz Editorial Pipeline — Transfer Approved Headlines (v3)
+Plantz Editorial Pipeline — Transfer Approved Headlines (v3.1)
 
 Scans the Headline Queue for approved headlines and creates corresponding
 records in the Articles table. Updates the Headline Queue status to
 'sent_to_news_agent' and stores the cross-reference ID.
 
-v3 changes:
-  - Adds priority_order mapping
-  - Does NOT map Publication Date (human sets it during review)
+v3.1 changes:
+  - Duplicate prevention: skips headlines whose record ID already exists
+    in Articles.headline_queue_id
+  - Atomicity: updates headline status to 'sent_to_news_agent' immediately
+    after creating each article, not in a separate batch at the end
 
 Env vars (must match .env naming):
   AIRTABLE_API_KEY, DISCORD_WEBHOOK_NOTIFICATIONS
@@ -79,34 +81,45 @@ def airtable_get(table_id, params=None):
     return all_records
 
 
-def airtable_batch_create(table_id, records):
-    """Create records in batches of 10 (Airtable limit)."""
-    created = []
-    for i in range(0, len(records), 10):
-        batch = records[i:i+10]
-        response = requests.post(
-            f"https://api.airtable.com/v0/{BASE_ID}/{table_id}",
-            headers=HEADERS,
-            json={"records": [{"fields": r} for r in batch]}
-        )
-        response.raise_for_status()
-        created.extend(response.json()["records"])
-    return created
+def airtable_create_record(table_id, fields):
+    """Create a single record in Airtable."""
+    response = requests.post(
+        f"https://api.airtable.com/v0/{BASE_ID}/{table_id}",
+        headers=HEADERS,
+        json={"records": [{"fields": fields}]}
+    )
+    response.raise_for_status()
+    return response.json()["records"][0]
 
 
-def airtable_batch_update(table_id, records):
-    """Update records in batches of 10 (Airtable limit)."""
-    updated = []
-    for i in range(0, len(records), 10):
-        batch = records[i:i+10]
-        response = requests.patch(
-            f"https://api.airtable.com/v0/{BASE_ID}/{table_id}",
-            headers=HEADERS,
-            json={"records": batch}
-        )
-        response.raise_for_status()
-        updated.extend(response.json()["records"])
-    return updated
+def airtable_update_record(table_id, record_id, fields):
+    """Update a single record in Airtable."""
+    response = requests.patch(
+        f"https://api.airtable.com/v0/{BASE_ID}/{table_id}",
+        headers=HEADERS,
+        json={"records": [{"id": record_id, "fields": fields}]}
+    )
+    response.raise_for_status()
+    return response.json()["records"][0]
+
+
+# ── Duplicate Check ───────────────────────────────────────────────────────
+
+def get_existing_headline_ids():
+    """Get all headline_queue_id values already in the Articles table.
+    This prevents duplicate transfers if the workflow runs multiple times."""
+    print("  Checking for already-transferred headlines...")
+    existing = airtable_get(ARTICLES_TABLE, params={
+        "fields[]": "headline_queue_id",
+        "filterByFormula": "{headline_queue_id} != ''"
+    })
+    ids = set()
+    for rec in existing:
+        hq_id = rec.get("fields", {}).get("headline_queue_id", "")
+        if hq_id:
+            ids.add(hq_id)
+    print(f"  Found {len(ids)} headline(s) already transferred")
+    return ids
 
 
 # ── Discord Notification ────────────────────────────────────────────────────
@@ -137,7 +150,7 @@ def notify_discord(message, color=5814783):
 
 def main():
     print("=" * 60)
-    print("PLANTZ EDITORIAL PIPELINE v3 — Headline Transfer")
+    print("PLANTZ EDITORIAL PIPELINE v3.1 — Headline Transfer")
     print(f"Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
     if DRY_RUN:
         print("MODE: DRY RUN (no changes will be made)")
@@ -156,67 +169,92 @@ def main():
         print("  No approved headlines found. Nothing to transfer.")
         return
 
-    print(f"  Found {len(approved)} approved headline(s):")
+    print(f"  Found {len(approved)} approved headline(s)")
+
+    # ── Step 2: Filter out already-transferred headlines ──
+    existing_ids = get_existing_headline_ids()
+
+    new_headlines = []
+    skipped = []
     for rec in approved:
+        if rec["id"] in existing_ids:
+            skipped.append(rec)
+        else:
+            new_headlines.append(rec)
+
+    if skipped:
+        print(f"  ⚠ Skipping {len(skipped)} already-transferred headline(s):")
+        for rec in skipped:
+            print(f"    • {rec['fields'].get('headline', '(no title)')} [DUPLICATE]")
+
+    if not new_headlines:
+        print("  All approved headlines have already been transferred. Nothing to do.")
+        # Still update status on any that are stuck as 'approved' but already transferred
+        if skipped:
+            print("  Updating stuck headline statuses...")
+            for rec in skipped:
+                if not DRY_RUN:
+                    airtable_update_record(HEADLINE_TABLE, rec["id"], {
+                        "status": "sent_to_news_agent"
+                    })
+            print(f"  ✓ Updated {len(skipped)} headline(s) to 'sent_to_news_agent'")
+        return
+
+    print(f"\n  {len(new_headlines)} new headline(s) to transfer:")
+    for rec in new_headlines:
         f = rec["fields"]
         print(f"    • {f.get('headline', '(no title)')}")
         print(f"      Angle: {f.get('angle', 'N/A')} | "
               f"Subject: {f.get('subject', 'N/A')}")
 
     if DRY_RUN:
-        print(f"\n🔍 DRY RUN — would transfer {len(approved)} headline(s):")
-        for rec in approved:
-            f = rec["fields"]
-            title = f.get("headline", "")
-            print(f"    → {title[:70]}{'...' if len(title) > 70 else ''}")
-            print(f"      pipeline_status: queued")
-        print("\n  No changes made. Remove --dry-run to execute.")
+        print(f"\n🔍 DRY RUN — would transfer {len(new_headlines)} headline(s)")
+        print("  No changes made. Remove --dry-run to execute.")
         return
 
-    # ── Step 2: Create article records ──
-    print(f"\n📝 Creating {len(approved)} article record(s) in Articles table...")
+    # ── Step 3: Transfer each headline atomically ──
+    print(f"\n📝 Transferring {len(new_headlines)} headline(s)...")
 
-    articles_to_create = []
-    for rec in approved:
+    created_articles = []
+    for rec in new_headlines:
         f = rec["fields"]
-        articles_to_create.append({
-            "article_title": f.get("headline", ""),
-            "prompt": f.get("article_prompt", ""),
-            "seo_keyword": f.get("seo_keyword", ""),
-            "angle": f.get("angle", ""),
-            "subject": f.get("subject", ""),
-            "batch_id": f.get("batch_id", ""),
-            "target_word_count": f.get("target_word_count", 1000),
-            "headline_queue_id": rec["id"],
-            "pipeline_status": "queued",
-            "priority_order": f.get("priority_order", 1)
-            # NOTE: Publication Date is NOT set here.
-            # The human sets it during article review.
-        })
+        title = f.get("headline", "(no title)")
 
-    created_articles = airtable_batch_create(ARTICLES_TABLE, articles_to_create)
-    print(f"  ✓ Created {len(created_articles)} article record(s)")
+        try:
+            # Create article record
+            article = airtable_create_record(ARTICLES_TABLE, {
+                "article_title": f.get("headline", ""),
+                "prompt": f.get("article_prompt", ""),
+                "seo_keyword": f.get("seo_keyword", ""),
+                "angle": f.get("angle", ""),
+                "subject": f.get("subject", ""),
+                "batch_id": f.get("batch_id", ""),
+                "target_word_count": f.get("target_word_count", 1000),
+                "headline_queue_id": rec["id"],
+                "pipeline_status": "queued",
+                "priority_order": f.get("priority_order", 1)
+            })
 
-    # ── Step 3: Update headline queue ──
-    print("\n🔄 Updating Headline Queue status to 'sent_to_news_agent'...")
-
-    headline_updates = []
-    for i, rec in enumerate(approved):
-        headline_updates.append({
-            "id": rec["id"],
-            "fields": {
+            # Immediately mark headline as transferred (prevents duplicates on retry)
+            airtable_update_record(HEADLINE_TABLE, rec["id"], {
                 "status": "sent_to_news_agent",
-                "articles_record_id": created_articles[i]["id"]
-            }
-        })
+                "articles_record_id": article["id"]
+            })
 
-    airtable_batch_update(HEADLINE_TABLE, headline_updates)
-    print(f"  ✓ Updated {len(headline_updates)} headline record(s)")
+            created_articles.append(article)
+            print(f"    ✓ {title[:60]}")
+
+        except Exception as e:
+            print(f"    ✗ {title[:60]} — ERROR: {e}")
+            # Don't stop the whole batch for one failure
+            continue
 
     # ── Step 4: Summary ──
     print("\n" + "=" * 60)
     print("TRANSFER COMPLETE")
     print(f"  Headlines transferred: {len(created_articles)}")
+    if skipped:
+        print(f"  Duplicates skipped:   {len(skipped)}")
     print(f"  Articles queued for News Agent:")
     for art in created_articles:
         f = art["fields"]
@@ -225,15 +263,16 @@ def main():
     print("=" * 60)
 
     # ── Step 5: Discord notification ──
-    titles = "\n".join(
-        [f"• {a['fields'].get('article_title', '(no title)')}"
-         for a in created_articles]
-    )
-    notify_discord(
-        f"**📋 {len(created_articles)} headline(s) transferred to Articles queue**\n\n"
-        f"{titles}\n\n"
-        f"The News Agent will write these automatically."
-    )
+    if created_articles:
+        titles = "\n".join(
+            [f"• {a['fields'].get('article_title', '(no title)')}"
+             for a in created_articles]
+        )
+        notify_discord(
+            f"**📋 {len(created_articles)} headline(s) transferred to Articles queue**\n\n"
+            f"{titles}\n\n"
+            f"The News Agent will write these automatically."
+        )
 
 
 if __name__ == "__main__":
