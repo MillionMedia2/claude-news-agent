@@ -1,12 +1,14 @@
-# Runs daily at 7am UTC to publish articles whose Publication Date is today.
-# Also triggered by Zapier when post_to_wordpress is ticked,
+# Runs hourly to publish articles whose Publication Date has arrived.
+# This handles future-dated articles: you can tick post_to_wordpress
+# and set a future date — the script will publish when the date comes.
+# Also triggered by Zapier when post_to_wordpress is ticked (for same-day),
 # or manually via GitHub Actions UI.
 
 name: Publish Approved Articles
 
 on:
   schedule:
-    - cron: '0 7 * * *'
+    - cron: '0 * * * *'  # Every hour, on the hour
   workflow_dispatch:
 
 jobs:
