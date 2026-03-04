@@ -1,20 +1,28 @@
 /**
- * Plantz News Agent - Article Generation Script (v3.1)
+ * Plantz News Agent - Article Generation Script (v3.2)
  * 
- * Pipeline v3.1: Write immediately when queued (no date dependency).
- * Human sets Publication Date later during review.
+ * Pipeline v3.2: Fix duplicate generation from overlapping runs.
+ * 
+ * v3.2 changes:
+ *   - Claim ALL queued articles as "writing" UPFRONT before processing any.
+ *     This prevents two overlapping runs (Zapier + cron) from both grabbing
+ *     the same articles. Previously, status was set per-article inside the
+ *     loop, so a second run could query and get the same "queued" list.
+ *   - If an article is already "writing" when we try to claim it, skip it
+ *     (another run got there first).
  * 
  * v3.1 changes:
  *   - maxArticlesPerRun: 10 (was 3) to handle full Monday batches
  * 
  * This script:
  * 1. Checks Airtable for articles with pipeline_status = "queued"
- * 2. Sets pipeline_status to "writing"
- * 3. Queries Pinecone for evidence
- * 4. Calls Claude API to generate the article + supporting content
- * 5. Updates Airtable with generated content
- * 6. Sets pipeline_status to "review"
- * 7. Sends Discord notification
+ * 2. Claims ALL found articles by setting pipeline_status to "writing" upfront
+ * 3. For each claimed article:
+ *    a. Queries Pinecone for evidence
+ *    b. Calls Claude API to generate the article + supporting content
+ *    c. Updates Airtable with generated content
+ *    d. Sets pipeline_status to "review"
+ * 4. Sends Discord notification
  *
  * Env vars (must match .env naming):
  *   ANTHROPIC_API_KEY, AIRTABLE_API_KEY, PINECONE_API_KEY,
@@ -74,6 +82,38 @@ async function updatePipelineStatus(recordId, status) {
       'pipeline_status': status
     }, (err, record) => err ? reject(err) : resolve(record));
   });
+}
+
+// ── Claim Articles (Atomic) ────────────────────────────────────────────────
+// v3.2: Set ALL articles to "writing" before processing any.
+// This prevents overlapping runs from grabbing the same articles.
+
+async function claimArticles(records) {
+  const claimed = [];
+  
+  for (const record of records) {
+    try {
+      // Re-check status before claiming (another run might have claimed it)
+      const fresh = await new Promise((resolve, reject) => {
+        airtable(CONFIG.airtable.tableId).find(record.id, (err, rec) => 
+          err ? reject(err) : resolve(rec)
+        );
+      });
+      
+      if (fresh.get('pipeline_status') !== 'queued') {
+        console.log(`   ⏭️  "${record.get('article_title')}" — already claimed by another run, skipping`);
+        continue;
+      }
+      
+      await updatePipelineStatus(record.id, 'writing');
+      claimed.push(record);
+      console.log(`   🔒 Claimed: "${record.get('article_title')}"`);
+    } catch (error) {
+      console.error(`   ⚠️ Failed to claim "${record.get('article_title')}": ${error.message}`);
+    }
+  }
+  
+  return claimed;
 }
 
 // ── Get Queued Articles ────────────────────────────────────────────────────
@@ -237,33 +277,44 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('🚀 Plantz News Agent v3.1 starting...');
+  console.log('🚀 Plantz News Agent v3.2 starting...');
   console.log(`Timestamp: ${new Date().toISOString()}`);
   console.log(`Max articles per run: ${CONFIG.maxArticlesPerRun}\n`);
   
   try {
+    // Step 1: Find queued articles
     const queuedArticles = await getQueuedArticles();
-    console.log(`📋 Found ${queuedArticles.length} queued article(s)\n`);
+    console.log(`📋 Found ${queuedArticles.length} queued article(s)`);
     
     if (queuedArticles.length === 0) {
       console.log('📭 No queued articles. Exiting.');
       return;
     }
 
+    // Step 2: CLAIM ALL articles upfront (v3.2 duplicate prevention)
+    // This sets them all to "writing" before we start generating.
+    // If another run is already processing them, they won't be "queued"
+    // when we re-check, so we skip them.
+    console.log('\n🔒 Claiming articles...');
+    const claimedArticles = await claimArticles(queuedArticles);
+    console.log(`   Claimed ${claimedArticles.length} of ${queuedArticles.length}\n`);
+    
+    if (claimedArticles.length === 0) {
+      console.log('📭 All articles already claimed by another run. Exiting.');
+      return;
+    }
+
+    // Step 3: Process claimed articles
     let successCount = 0;
     let errorCount = 0;
 
-    for (const record of queuedArticles) {
+    for (const record of claimedArticles) {
       const title = record.get('article_title');
       const prompt = record.get('prompt');
       
       console.log(`📝 Processing: "${title}"`);
       
       try {
-        // Mark as writing
-        await updatePipelineStatus(record.id, 'writing');
-        console.log('   📌 Status: writing');
-        
         // Query Pinecone for evidence
         const searchTerms = `${title} ${prompt}`.substring(0, 500);
         console.log('   🔍 Querying Pinecone...');

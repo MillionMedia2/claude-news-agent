@@ -1,0 +1,29 @@
+# Generates 10 article headlines every Monday at 6am UTC.
+# Headlines land in the Headline Queue with status: "draft"
+# for human review. The script skips if 5+ drafts already exist.
+# Runs before the 7am generate-articles cron so approved headlines
+# from last week get written, and new headlines arrive for this week.
+
+name: Generate Headlines (Monday)
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # 6am UTC, Mondays only
+  workflow_dispatch:        # Manual trigger (always runs, ignores day check)
+
+jobs:
+  generate-headlines:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: node scripts/generate-headlines.js ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          DISCORD_WEBHOOK_NOTIFICATIONS: ${{ secrets.DISCORD_WEBHOOK_NOTIFICATIONS }}
