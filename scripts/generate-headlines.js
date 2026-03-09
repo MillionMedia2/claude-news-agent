@@ -1,18 +1,20 @@
 /**
- * Plantz News Agent - Headline Generation Script (v1.0)
+ * Plantz News Agent - Headline Generation Script (v1.1)
  *
  * Runs every Monday at 6am UTC. Generates 10 article headlines
  * with full writing prompts and creates them in the Headline Queue
  * with status: "draft" for human review.
  *
+ * v1.1: Removed draft-skip logic. Always generates 10 headlines
+ *       every Monday regardless of existing drafts.
+ *
  * The script:
  * 1. Checks it's Monday (skips otherwise, unless --force)
- * 2. Checks for existing draft headlines (skips if 5+ unreviewed)
- * 3. Queries Pinecone for available herb/supplement topics
- * 4. Fetches recently published subjects to avoid repetition
- * 5. Calls Claude to generate 10 headlines with full article prompts
- * 6. Creates records in Headline Queue with status: "draft"
- * 7. Sends Discord notification
+ * 2. Queries Pinecone for available herb/supplement topics
+ * 3. Fetches recently published subjects to avoid repetition
+ * 4. Calls Claude to generate 10 headlines with full article prompts
+ * 5. Creates records in Headline Queue with status: "draft"
+ * 6. Sends Discord notification
  *
  * Env vars (must match .env naming):
  *   ANTHROPIC_API_KEY, AIRTABLE_API_KEY, PINECONE_API_KEY,
@@ -33,8 +35,7 @@ const CONFIG = {
     host: 'https://plantz1-aokppsg.svc.gcp-europe-west4-de1d.pinecone.io',
     namespace: 'herb_monographs'
   },
-  headlinesToGenerate: 10,
-  maxDraftsBeforeSkip: 5
+  headlinesToGenerate: 10
 };
 
 const FORCE = process.argv.includes('--force');
@@ -73,21 +74,6 @@ async function sendDiscordNotification(message, isError = false) {
 }
 
 // ── Airtable Queries ───────────────────────────────────────────────────────
-
-async function getDraftHeadlineCount() {
-  return new Promise((resolve, reject) => {
-    let count = 0;
-    airtable(CONFIG.airtable.headlineTable)
-      .select({
-        filterByFormula: '{status} = "draft"',
-        fields: ['headline']
-      })
-      .eachPage(
-        (records, next) => { count += records.length; next(); },
-        (err) => err ? reject(err) : resolve(count)
-      );
-  });
-}
 
 async function getRecentSubjects(limit = 30) {
   return new Promise((resolve, reject) => {
@@ -283,7 +269,7 @@ async function createHeadlines(headlines) {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('📋 Plantz Headline Generator v1.0');
+  console.log('📋 Plantz Headline Generator v1.1');
   console.log(`Timestamp: ${new Date().toISOString()}`);
   console.log(`Day: ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date().getUTCDay()]}`);
 
@@ -299,20 +285,6 @@ async function main() {
   }
 
   try {
-    // Check for existing drafts
-    console.log('\n🔍 Checking existing draft headlines...');
-    const draftCount = await getDraftHeadlineCount();
-    console.log(`   ${draftCount} unreviewed drafts in queue`);
-
-    if (draftCount >= CONFIG.maxDraftsBeforeSkip && !FORCE) {
-      console.log(`   ⚠️ ${draftCount} drafts already pending — skipping generation.`);
-      console.log('   Review existing headlines before generating new ones.');
-      await sendDiscordNotification(
-        `**Headline generation skipped** — ${draftCount} unreviewed drafts already in queue.\n\nReview and approve existing headlines before new ones are generated.`
-      );
-      return;
-    }
-
     // Get recent subjects to avoid repetition
     console.log('\n📚 Fetching recent subjects...');
     const recentArticleSubjects = await getRecentSubjects();
