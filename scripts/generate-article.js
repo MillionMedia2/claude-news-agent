@@ -1,15 +1,15 @@
 /**
- * Plantz News Agent - Article Generation Script (v3.2)
+ * Plantz News Agent - Article Generation Script (v3.3)
  * 
- * Pipeline v3.2: Fix duplicate generation from overlapping runs.
+ * v3.3 changes:
+ *   - Updated system prompt with Yoast SEO readability rules:
+ *     - Max 10% passive voice
+ *     - Max 25% sentences over 20 words
+ *     - Transition words in 30%+ of sentences
+ *     - Short paragraphs (max 3-4 sentences)
  * 
  * v3.2 changes:
  *   - Claim ALL queued articles as "writing" UPFRONT before processing any.
- *     This prevents two overlapping runs (Zapier + cron) from both grabbing
- *     the same articles. Previously, status was set per-article inside the
- *     loop, so a second run could query and get the same "queued" list.
- *   - If an article is already "writing" when we try to claim it, skip it
- *     (another run got there first).
  * 
  * v3.1 changes:
  *   - maxArticlesPerRun: 10 (was 3) to handle full Monday batches
@@ -86,14 +86,12 @@ async function updatePipelineStatus(recordId, status) {
 
 // ── Claim Articles (Atomic) ────────────────────────────────────────────────
 // v3.2: Set ALL articles to "writing" before processing any.
-// This prevents overlapping runs from grabbing the same articles.
 
 async function claimArticles(records) {
   const claimed = [];
   
   for (const record of records) {
     try {
-      // Re-check status before claiming (another run might have claimed it)
       const fresh = await new Promise((resolve, reject) => {
         airtable(CONFIG.airtable.tableId).find(record.id, (err, rec) => 
           err ? reject(err) : resolve(rec)
@@ -117,7 +115,6 @@ async function claimArticles(records) {
 }
 
 // ── Get Queued Articles ────────────────────────────────────────────────────
-// v3: No date check. Write anything that's queued, oldest first.
 
 async function getQueuedArticles() {
   return new Promise((resolve, reject) => {
@@ -177,21 +174,60 @@ async function searchPinecone(searchText) {
 // ── Article Generation ─────────────────────────────────────────────────────
 
 async function generateArticle(title, prompt, evidence) {
-  const systemPrompt = `You are the Plantz News Agent, writing evidence-based wellness articles for Aisha - a 35-40 year old UK woman who is wellness-curious but skeptical of hype.
+  const systemPrompt = `You are the Plantz News Agent, writing evidence-based wellness articles for Aisha — a 28-40 year old UK woman who is wellness-curious but skeptical of hype.
 
-Tone: Calm, evidence-led, curious, warm. Never preachy or salesy.
-Format: Markdown with ## headings (no # H1 - title is separate)
-Length: ~1,000-1,200 words
-UK Regulatory: No cure claims. Use "research suggests", "may support", "traditionally used for"
+## Voice & Tone
+- Calm, evidence-led, curious, warm. Like a knowledgeable friend, not a lecturer.
+- Never preachy, salesy, or evangelical. She's already interested — she needs proof, not persuasion.
+- UK English spelling throughout (e.g. "optimise", "colour", "recognised").
 
-Structure:
-- Opening hook (no heading)
-- 4-6 H2 sections with evidence and mechanisms
-- Practical "how to use" section
-- Closing paragraph
-- Disclaimer
+## UK Regulatory Compliance
+- NEVER make medicinal claims. No "cures", "treats", "prevents", "heals".
+- Use: "research suggests", "may support", "traditionally used for", "some evidence indicates".
+- Frame everything as educational, not prescriptive.
 
-Always ground claims in the evidence provided.`;
+## SEO Readability Rules (Yoast Green Score Targets)
+These are STRICT requirements — every article MUST meet them:
+
+1. ACTIVE VOICE: Use active voice in at least 90% of sentences. Passive voice must stay below 10%.
+   - BAD: "The compound was found to reduce inflammation in a 2023 study."
+   - GOOD: "A 2023 study found that the compound reduces inflammation."
+   - BAD: "Benefits have been reported by users."
+   - GOOD: "Users report several benefits."
+
+2. SENTENCE LENGTH: Keep at least 75% of sentences under 20 words. Aim for an average of 12-17 words per sentence.
+   - Mix short punchy sentences with medium ones. Break up long sentences into two.
+   - If a sentence has a comma and an "and", it can probably become two sentences.
+
+3. PARAGRAPH LENGTH: Maximum 3-4 sentences per paragraph. Many paragraphs should be just 2-3 sentences. White space is your friend.
+
+4. TRANSITION WORDS: Use transition words or phrases in at least 30% of sentences. Examples: "however", "for example", "in addition", "as a result", "specifically", "meanwhile", "on the other hand", "that said", "in practice", "interestingly", "importantly".
+
+5. SUBHEADING DISTRIBUTION: No more than 250-300 words between ## headings. If a section runs long, break it with another ## heading.
+
+6. FLESCH READING EASE: Target 60-70 (easily understood by 13-15 year olds). Use plain English. If a technical term is necessary, explain it immediately.
+
+## Article Format
+- Markdown with ## headings only (no # H1 — the title is handled separately by WordPress)
+- Length: 1,000-1,200 words
+- Do NOT start the article with the same words as the title
+
+## Article Structure
+1. Opening hook paragraph (no heading) — 2-3 sentences that draw the reader in
+2. 4-6 ## sections covering evidence, mechanisms, practical guidance
+3. A practical "How to Use" or "What to Look For" section near the end
+4. Brief closing paragraph
+5. Disclaimer in italics: "_This article is for educational purposes only and does not constitute medical advice. Consult a healthcare professional before starting any new supplement._"
+
+## Writing Checklist (apply before finishing)
+- Did I use active voice throughout? Check every "was", "were", "been", "being" — can it be rewritten?
+- Are my sentences short and punchy? Read them aloud — if you run out of breath, split the sentence.
+- Did I start at least 30% of sentences with a transition word?
+- Are all paragraphs 4 sentences or fewer?
+- Is there a ## heading every 250-300 words or sooner?
+- Did I avoid passive constructions like "X has been shown to" (use "studies show X" instead)?
+
+Always ground claims in the evidence provided. Cite specific studies, doses, and outcomes where the evidence supports it.`;
 
   const userPrompt = `Write an article titled: "${title}"
 
@@ -200,6 +236,8 @@ ${prompt}
 
 ## Evidence from Knowledge Base:
 ${evidence}
+
+Remember: active voice, short sentences, transition words, short paragraphs. These are strict SEO requirements.
 
 Generate the complete article now.`;
 
@@ -266,7 +304,6 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
       'claude_image_prompt': supportingContent.claude_image_prompt || '',
       'categories': supportingContent.categories || ['Natural Remedies'],
       'article_source_name': 'Plantz News Agent (GitHub Actions)'
-      // NOTE: Publication Date is NOT set here. Human sets it during review.
     }, (err, record) => {
       if (err) reject(err);
       else resolve(record);
@@ -277,12 +314,11 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('🚀 Plantz News Agent v3.2 starting...');
+  console.log('🚀 Plantz News Agent v3.3 starting...');
   console.log(`Timestamp: ${new Date().toISOString()}`);
   console.log(`Max articles per run: ${CONFIG.maxArticlesPerRun}\n`);
   
   try {
-    // Step 1: Find queued articles
     const queuedArticles = await getQueuedArticles();
     console.log(`📋 Found ${queuedArticles.length} queued article(s)`);
     
@@ -291,10 +327,6 @@ async function main() {
       return;
     }
 
-    // Step 2: CLAIM ALL articles upfront (v3.2 duplicate prevention)
-    // This sets them all to "writing" before we start generating.
-    // If another run is already processing them, they won't be "queued"
-    // when we re-check, so we skip them.
     console.log('\n🔒 Claiming articles...');
     const claimedArticles = await claimArticles(queuedArticles);
     console.log(`   Claimed ${claimedArticles.length} of ${queuedArticles.length}\n`);
@@ -304,7 +336,6 @@ async function main() {
       return;
     }
 
-    // Step 3: Process claimed articles
     let successCount = 0;
     let errorCount = 0;
 
@@ -315,30 +346,24 @@ async function main() {
       console.log(`📝 Processing: "${title}"`);
       
       try {
-        // Query Pinecone for evidence
         const searchTerms = `${title} ${prompt}`.substring(0, 500);
         console.log('   🔍 Querying Pinecone...');
         const evidence = await searchPinecone(searchTerms);
         console.log(`   Found ${evidence.length} chars of evidence`);
         
-        // Generate article
         console.log('   ✍️  Generating article...');
         const article = await generateArticle(title, prompt, evidence);
         console.log(`   Generated ${article.length} chars`);
         
-        // Generate supporting content
         console.log('   📦 Generating supporting content...');
         const supportingContent = await generateSupportingContent(article, title);
         
-        // Update Airtable
         console.log('   💾 Updating Airtable...');
         await updateAirtableRecord(record.id, article, supportingContent);
         
-        // Mark as review
         await updatePipelineStatus(record.id, 'review');
         console.log('   📌 Status: review');
         
-        // Discord notification
         await sendDiscordNotification(
           `**${title}**\n\n` +
           `Ready for review in Airtable.\n` +
