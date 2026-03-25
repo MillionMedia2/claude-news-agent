@@ -85,14 +85,14 @@ async function claimArticles(records) {
         );
       });
       if (fresh.get('pipeline_status') !== 'queued') {
-        console.log(\`   ⏭️  "\${record.get('article_title')}" — already claimed, skipping\`);
+        console.log(`   ⏭️  "${record.get('article_title')}" — already claimed, skipping`);
         continue;
       }
       await updatePipelineStatus(record.id, 'writing');
       claimed.push(record);
-      console.log(\`   🔒 Claimed: "\${record.get('article_title')}"\`);
+      console.log(`   🔒 Claimed: "${record.get('article_title')}"`);
     } catch (error) {
-      console.error(\`   ⚠️ Failed to claim "\${record.get('article_title')}": \${error.message}\`);
+      console.error(`   ⚠️ Failed to claim "${record.get('article_title')}": ${error.message}`);
     }
   }
   return claimed;
@@ -106,11 +106,11 @@ async function getQueuedArticles() {
     airtable(CONFIG.airtable.tableId)
       .select({
         maxRecords: CONFIG.maxArticlesPerRun,
-        filterByFormula: \`AND(
+        filterByFormula: `AND(
           {pipeline_status} = "queued",
           {written_article} = '',
           {prompt} != ''
-        )\`,
+        )`,
         sort: [{ field: 'Created', direction: 'asc' }]
       })
       .eachPage(
@@ -125,7 +125,7 @@ async function getQueuedArticles() {
 async function searchPinecone(searchText) {
   try {
     const response = await fetch(
-      \`https://plantz1-aokppsg.svc.gcp-europe-west4-de1d.pinecone.io/records/namespaces/\${CONFIG.pinecone.namespace}/search\`,
+      `https://plantz1-aokppsg.svc.gcp-europe-west4-de1d.pinecone.io/records/namespaces/${CONFIG.pinecone.namespace}/search`,
       {
         method: 'POST',
         headers: {
@@ -137,19 +137,18 @@ async function searchPinecone(searchText) {
         })
       }
     );
-    if (!response.ok) throw new Error(\`Pinecone search failed: \${response.status}\`);
+    if (!response.ok) throw new Error(`Pinecone search failed: ${response.status}`);
     const data = await response.json();
-    return data.result?.hits?.map(hit => hit.fields?.text || '').join('\\n\\n---\\n\\n') || '';
+    return data.result?.hits?.map(hit => hit.fields?.text || '').join('\n\n---\n\n') || '';
   } catch (error) {
     console.error('Pinecone search error:', error);
     return '';
   }
 }
 
-// ── Article Generation ─────────────────────────────────────────────────────
+// ── System Prompt ──────────────────────────────────────────────────────────
 
-async function generateArticle(title, prompt, evidence) {
-  const systemPrompt = \`You are 'The Plantz Guide,' a warm, intelligent, and evidence-led article writer for Plantz.io, a UK-based natural health platform. Your goal is to educate, inspire, and build trust — never to sell.
+const SYSTEM_PROMPT = `You are 'The Plantz Guide,' a warm, intelligent, and evidence-led article writer for Plantz.io, a UK-based natural health platform. Your goal is to educate, inspire, and build trust — never to sell.
 
 ## YOUR AUDIENCE: AISHA, THE WELLNESS EXPLORER
 
@@ -272,15 +271,18 @@ Before outputting, verify:
 - No medicinal claims? No "cures", "treats", "prevents"?
 - SEO keyphrase appears in 30-75% of subheadings?
 - UK English spelling throughout?
-- Does this feel like content from a calm, trusted, intelligent friend?\`;
+- Does this feel like content from a calm, trusted, intelligent friend?`;
 
-  const userPrompt = \`Write an article titled: "\${title}"
+// ── Article Generation ─────────────────────────────────────────────────────
+
+async function generateArticle(title, prompt, evidence) {
+  const userPrompt = `Write an article titled: "${title}"
 
 ## Research Brief:
-\${prompt}
+${prompt}
 
 ## Evidence from Knowledge Base:
-\${evidence}
+${evidence}
 
 STRICT REQUIREMENTS for this article:
 - Active voice (90%+), short sentences (75% under 20 words), transition words (30%+)
@@ -289,13 +291,13 @@ STRICT REQUIREMENTS for this article:
 - UK English spelling
 - Include the SEO keyphrase from the research brief in 30-75% of subheadings
 
-Generate the complete article now.\`;
+Generate the complete article now.`;
 
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 4000,
     messages: [{ role: 'user', content: userPrompt }],
-    system: systemPrompt
+    system: SYSTEM_PROMPT
   });
 
   return response.content[0].text;
@@ -307,9 +309,9 @@ async function generateSupportingContent(article, title) {
     max_tokens: 2000,
     messages: [{
       role: 'user',
-      content: \`Based on this article titled "\${title}":
+      content: `Based on this article titled "${title}":
 
-\${article}
+${article}
 
 Generate the following in JSON format:
 {
@@ -323,15 +325,15 @@ Generate the following in JSON format:
   "categories": ["array of 1-3 from: Natural Remedies, Health, Research, Lifestyle"]
 }
 
-Return ONLY valid JSON, no markdown.\`
+Return ONLY valid JSON, no markdown.`
     }],
     system: 'You are a content assistant for Plantz.io. Return only valid JSON, no explanation. Match the warm, evidence-led Aisha tone in social content. Never use aggressive CTAs or hype language.'
   });
 
   try {
     let jsonStr = response.content[0].text;
-    if (jsonStr.includes('\`\`\`json')) jsonStr = jsonStr.split('\`\`\`json')[1].split('\`\`\`')[0];
-    else if (jsonStr.includes('\`\`\`')) jsonStr = jsonStr.split('\`\`\`')[1].split('\`\`\`')[0];
+    if (jsonStr.includes('```json')) jsonStr = jsonStr.split('```json')[1].split('```')[0];
+    else if (jsonStr.includes('```')) jsonStr = jsonStr.split('```')[1].split('```')[0];
     return JSON.parse(jsonStr.trim());
   } catch (e) {
     console.error('Failed to parse supporting content:', e);
@@ -365,21 +367,21 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
 
 async function main() {
   console.log('🚀 Plantz News Agent v3.4 starting...');
-  console.log(\`Timestamp: \${new Date().toISOString()}\`);
-  console.log(\`Max articles per run: \${CONFIG.maxArticlesPerRun}\\n\`);
+  console.log(`Timestamp: ${new Date().toISOString()}`);
+  console.log(`Max articles per run: ${CONFIG.maxArticlesPerRun}\n`);
   
   try {
     const queuedArticles = await getQueuedArticles();
-    console.log(\`📋 Found \${queuedArticles.length} queued article(s)\`);
+    console.log(`📋 Found ${queuedArticles.length} queued article(s)`);
     
     if (queuedArticles.length === 0) {
       console.log('📭 No queued articles. Exiting.');
       return;
     }
 
-    console.log('\\n🔒 Claiming articles...');
+    console.log('\n🔒 Claiming articles...');
     const claimedArticles = await claimArticles(queuedArticles);
-    console.log(\`   Claimed \${claimedArticles.length} of \${queuedArticles.length}\\n\`);
+    console.log(`   Claimed ${claimedArticles.length} of ${queuedArticles.length}\n`);
     
     if (claimedArticles.length === 0) {
       console.log('📭 All articles already claimed by another run. Exiting.');
@@ -393,17 +395,17 @@ async function main() {
       const title = record.get('article_title');
       const prompt = record.get('prompt');
       
-      console.log(\`📝 Processing: "\${title}"\`);
+      console.log(`📝 Processing: "${title}"`);
       
       try {
-        const searchTerms = \`\${title} \${prompt}\`.substring(0, 500);
+        const searchTerms = `${title} ${prompt}`.substring(0, 500);
         console.log('   🔍 Querying Pinecone...');
         const evidence = await searchPinecone(searchTerms);
-        console.log(\`   Found \${evidence.length} chars of evidence\`);
+        console.log(`   Found ${evidence.length} chars of evidence`);
         
         console.log('   ✍️  Generating article...');
         const article = await generateArticle(title, prompt, evidence);
-        console.log(\`   Generated \${article.length} chars\`);
+        console.log(`   Generated ${article.length} chars`);
         
         console.log('   📦 Generating supporting content...');
         const supportingContent = await generateSupportingContent(article, title);
@@ -415,34 +417,34 @@ async function main() {
         console.log('   📌 Status: review');
         
         await sendDiscordNotification(
-          \`**\${title}**\\n\\n\` +
-          \`Ready for review in Airtable.\\n\` +
-          \`Categories: \${(supportingContent.categories || []).join(', ')}\\n\\n\` +
-          \`_Review the article, upload a featured image, set a Publication Date, and tick ☑ post_to_wordpress._\`
+          `**${title}**\n\n` +
+          `Ready for review in Airtable.\n` +
+          `Categories: ${(supportingContent.categories || []).join(', ')}\n\n` +
+          `_Review the article, upload a featured image, set a Publication Date, and tick ☑ post_to_wordpress._`
         );
         
         successCount++;
-        console.log(\`   ✅ Complete!\\n\`);
+        console.log(`   ✅ Complete!\n`);
         
       } catch (error) {
         errorCount++;
-        console.error(\`   ❌ Error: \${error.message}\\n\`);
+        console.error(`   ❌ Error: ${error.message}\n`);
         
         try {
           await updatePipelineStatus(record.id, 'error');
         } catch (statusErr) {
-          console.error(\`   ⚠️ Could not update status to error: \${statusErr.message}\`);
+          console.error(`   ⚠️ Could not update status to error: ${statusErr.message}`);
         }
         
         await sendDiscordNotification(
-          \`**Error writing:** \${title}\\n\\\`\\\`\\\`\${error.message}\\\`\\\`\\\`\`,
+          `**Error writing:** ${title}\n\`\`\`${error.message}\`\`\``,
           true
         );
       }
     }
 
     console.log('━'.repeat(50));
-    console.log(\`🎉 Run complete: \${successCount} written, \${errorCount} errors\`);
+    console.log(`🎉 Run complete: ${successCount} written, ${errorCount} errors`);
     
     if (errorCount > 0) {
       console.log('⚠️ Some articles had errors — check Discord for details.');
@@ -450,7 +452,7 @@ async function main() {
     
   } catch (error) {
     console.error('Fatal error:', error);
-    await sendDiscordNotification(\`**Fatal error:**\\n\\\`\\\`\\\`\${error.message}\\\`\\\`\\\`\`, true);
+    await sendDiscordNotification(`**Fatal error:**\n\`\`\`${error.message}\`\`\``, true);
     process.exit(1);
   }
 }
