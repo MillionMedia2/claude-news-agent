@@ -1,6 +1,13 @@
 # Runs daily at 7am UTC to write any queued articles.
 # Also triggered by Zapier after headline transfer,
 # or manually via GitHub Actions UI.
+#
+# Concurrency group ensures only one article-generation run is ever
+# active at a time. If a second run is triggered while one is in
+# flight (e.g. Zapier firing during the daily cron), the new run
+# will WAIT for the current one to finish rather than running in
+# parallel. This is the final fix for the intermittent
+# duplicate-article bug.
 
 name: Generate Articles
 
@@ -8,6 +15,10 @@ on:
   schedule:
     - cron: '0 7 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: generate-articles
+  cancel-in-progress: false
 
 jobs:
   generate:
