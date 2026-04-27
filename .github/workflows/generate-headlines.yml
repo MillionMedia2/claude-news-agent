@@ -11,6 +11,9 @@ on:
     - cron: '0 6 * * 1'  # 6am UTC, Mondays only
   workflow_dispatch:        # Manual trigger (always runs, ignores day check)
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   generate-headlines:
     runs-on: ubuntu-latest
@@ -18,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
       - run: npm ci
       - run: node scripts/generate-headlines.js ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}

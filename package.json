@@ -9,7 +9,7 @@
     "test": "node scripts/test-connection.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.30.0",
+    "@anthropic-ai/sdk": "^0.90.0",
     "@pinecone-database/pinecone": "^2.0.0",
     "airtable": "^0.12.2"
   },

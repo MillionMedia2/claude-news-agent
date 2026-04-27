@@ -1,29 +1,31 @@
-# Runs twice daily to publish articles whose Publication Date has arrived.
-# 10am UTC (mid-morning UK) and 4pm UTC (late afternoon UK).
-# Zap 3 has been disabled — this cron is the sole publish trigger,
-# which prevents the duplicate publishing caused by overlapping triggers.
+# Publishes approved articles to WordPress.
+# Runs twice daily (10am and 4pm UTC) — after article generation.
 
 name: Publish Approved Articles
 
 on:
   schedule:
-    - cron: '0 10 * * *'  # 10am UTC (mid-morning UK)
-    - cron: '0 16 * * *'  # 4pm UTC (late afternoon UK)
+    - cron: '0 10 * * *'  # 10am UTC daily
+    - cron: '0 16 * * *'  # 4pm UTC daily
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  publish:
+  publish-approved:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
       - run: npm ci
-      - run: npm run publish
+      - run: node scripts/publish-to-wordpress.js
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
-          WORDPRESS_USERNAME: ${{ secrets.WORDPRESS_USERNAME }}
-          WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USERNAME: ${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
           DISCORD_WEBHOOK_NOTIFICATIONS: ${{ secrets.DISCORD_WEBHOOK_NOTIFICATIONS }}

@@ -1,37 +1,27 @@
-# Triggered by Zapier when headlines are approved in Airtable,
-# or manually via GitHub Actions UI.
+# Transfers approved headlines from the Headline Queue to the Articles table.
+# Runs hourly. Uses the "claim first" pattern to prevent duplicate transfers.
 
-name: Transfer Approved Headlines
+name: Transfer Headlines
 
 on:
+  schedule:
+    - cron: '0 * * * *'  # Every hour
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Run in dry-run mode (no changes)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  transfer:
+  transfer-headlines:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: '3.12'
-      - name: Install dependencies
-        run: pip install requests
-      - name: Transfer approved headlines
-        run: |
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            python scripts/transfer_headlines.py --dry-run
-          else
-            python scripts/transfer_headlines.py
-          fi
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: node scripts/transfer_headlines.js
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
           DISCORD_WEBHOOK_NOTIFICATIONS: ${{ secrets.DISCORD_WEBHOOK_NOTIFICATIONS }}

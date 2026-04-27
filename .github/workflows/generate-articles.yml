@@ -1,36 +1,33 @@
-# Runs daily at 7am UTC to write any queued articles.
-# Also triggered by Zapier after headline transfer,
-# or manually via GitHub Actions UI.
-#
-# Concurrency group ensures only one article-generation run is ever
-# active at a time. If a second run is triggered while one is in
-# flight (e.g. Zapier firing during the daily cron), the new run
-# will WAIT for the current one to finish rather than running in
-# parallel. This is the final fix for the intermittent
-# duplicate-article bug.
+# Generates articles from approved headlines in the Headline Queue.
+# Runs twice daily (10am and 4pm UTC) and on workflow_dispatch.
+# Uses a concurrency group to prevent overlapping runs.
 
 name: Generate Articles
 
 on:
   schedule:
-    - cron: '0 7 * * *'
+    - cron: '0 10 * * *'  # 10am UTC daily
+    - cron: '0 16 * * *'  # 4pm UTC daily
   workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 concurrency:
   group: generate-articles
   cancel-in-progress: false
 
 jobs:
-  generate:
+  generate-articles:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
       - run: npm ci
-      - run: npm run generate
+      - run: node scripts/generate-article.js
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
