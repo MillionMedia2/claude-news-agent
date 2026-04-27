@@ -152,7 +152,7 @@ async function getRecentHeadlineSubjects(limit = 40) {
 
 async function queryPinecone(namespace, text, topK = 5, filter = null) {
   try {
-    const body = { query: { topK, inputs: { text } } };
+    const body = { query: { top_k: topK, inputs: { text } } };
     if (filter) body.query.filter = filter;
 
     const response = await fetch(
@@ -168,7 +168,8 @@ async function queryPinecone(namespace, text, topK = 5, filter = null) {
     );
 
     if (!response.ok) {
-      console.error(`   ⚠️ Pinecone ${namespace} query failed: ${response.status}`);
+      const errBody = await response.text().catch(() => '');
+      console.error(`   ⚠️ Pinecone ${namespace} query failed: ${response.status} ${errBody.substring(0, 200)}`);
       return [];
     }
 
