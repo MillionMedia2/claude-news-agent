@@ -1,0 +1,55 @@
+name: Apply Pinecone API fix
+on:
+  workflow_dispatch:
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fix topK to top_k in Pinecone REST calls
+        run: |
+          # Fix generate-headlines.js: topK shorthand -> top_k: topK
+          sed -i 's/{ query: { topK, inputs: { text } } }/{ query: { top_k: topK, inputs: { text } } }/' scripts/generate-headlines.js
+          
+          # Fix generate-article.js: topK shorthand -> top_k: topK  
+          sed -i 's/query: { topK, inputs: { text: searchText } }/query: { top_k: topK, inputs: { text: searchText } }/' scripts/generate-article.js
+          
+          # Add better error logging to generate-headlines.js
+          sed -i "s/console.error(\`   ⚠️ Pinecone \${namespace} query failed: \${response.status}\`);/const errBody = await response.text().catch(() => ''); console.error(\`   ⚠️ Pinecone \${namespace} query failed: \${response.status} \${errBody.substring(0, 200)}\`);/" scripts/generate-headlines.js
+          
+          # Add better error logging to generate-article.js
+          sed -i "s/console.error(\`   ⚠️ Pinecone \${namespace} search failed: \${response.status}\`);/const errBody = await response.text().catch(() => ''); console.error(\`   ⚠️ Pinecone \${namespace} search failed: \${response.status} \${errBody.substring(0, 200)}\`);/" scripts/generate-article.js
+          
+          # Verify fixes
+          echo '=== Verify headlines fix ==='
+          grep -n 'top_k' scripts/generate-headlines.js
+          echo '=== Verify article fix ==='
+          grep -n 'top_k' scripts/generate-article.js
+          
+          # Syntax check
+          node --check scripts/generate-headlines.js
+          node --check scripts/generate-article.js
+          echo 'Both files pass syntax check'
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      
+      - name: Commit fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add scripts/generate-headlines.js scripts/generate-article.js
+          git diff --cached --quiet && echo 'No changes to commit' && exit 0
+          git commit -m 'fix: Pinecone REST API uses snake_case top_k, not camelCase topK
+          
+          The Pinecone /records/namespaces/{ns}/search endpoint returns 422
+          when the request body uses camelCase "topK" instead of snake_case
+          "top_k". The Pinecone JS SDK uses camelCase internally but the
+          raw REST API expects snake_case.
+          
+          Also adds response body to Pinecone error logging for easier
+          debugging of future API issues.
+          
+          Fixes both generate-headlines.js and generate-article.js.'
+          git push
