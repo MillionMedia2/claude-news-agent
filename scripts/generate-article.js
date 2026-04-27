@@ -180,12 +180,13 @@ async function searchNamespace(namespace, searchText, topK = 8) {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          query: { topK, inputs: { text: searchText } }
+          query: { top_k: topK, inputs: { text: searchText } }
         })
       }
     );
     if (!response.ok) {
-      console.error(`   ⚠️ Pinecone ${namespace} search failed: ${response.status}`);
+      const errBody = await response.text().catch(() => '');
+      console.error(`   ⚠️ Pinecone ${namespace} search failed: ${response.status} ${errBody.substring(0, 200)}`);
       return [];
     }
     const data = await response.json();
