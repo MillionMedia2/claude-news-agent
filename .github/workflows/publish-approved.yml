@@ -25,6 +25,6 @@ jobs:
       - run: node scripts/publish-to-wordpress.js
         env:
           AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }}
-          WORDPRESS_USERNAME: ${{ secrets.WP_USERNAME }}
-          WORDPRESS_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+          WORDPRESS_USERNAME: ${{ secrets.WORDPRESS_USERNAME }}
+          WORDPRESS_APP_PASSWORD: ${{ secrets.WORDPRESS_APP_PASSWORD }}
           DISCORD_WEBHOOK_NOTIFICATIONS: ${{ secrets.DISCORD_WEBHOOK_NOTIFICATIONS }}
