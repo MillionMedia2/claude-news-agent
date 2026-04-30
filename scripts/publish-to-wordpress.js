@@ -1,18 +1,23 @@
 /**
- * Plantz News Agent - WordPress Publishing Script (v3)
+ * Plantz News Agent - WordPress Publishing Script (v3.1)
+ *
+ * v3.1 fix: Removed {featured_image} != '' from the Airtable filterByFormula.
+ *   Airtable attachment fields cannot be compared to empty string — the check
+ *   always evaluates false, silently skipping every record. The image check
+ *   is now done in JS after fetching. Articles without a featured image will
+ *   still publish (image upload is skipped), consistent with the existing
+ *   uploadFeaturedImage call which already guards with images?.length > 0.
  *
  * v3: Date-aware publishing. Only publishes articles where:
  *   - post_to_wordpress is checked
  *   - Publication Date <= today
- *   - featured_image is uploaded
  *   - Plantz URL is empty (not yet published)
  *   - written_article exists
  *
  * After publishing, sets pipeline_status to "published".
  *
- * Env vars (must match .env naming):
- *   AIRTABLE_API_KEY, WORDPRESS_USERNAME, WORDPRESS_APP_PASSWORD,
- *   DISCORD_WEBHOOK_NOTIFICATIONS
+ * Env vars: AIRTABLE_API_KEY, WORDPRESS_USERNAME, WORDPRESS_APP_PASSWORD,
+ *           DISCORD_WEBHOOK_NOTIFICATIONS
  */
 
 import Airtable from 'airtable';
@@ -130,7 +135,9 @@ async function createWordPressPost(article, mediaId, categoryIds, tagIds) {
   return res.json();
 }
 
-// v3: Date-aware query — only publish articles whose Publication Date is today or earlier
+// v3.1: Removed {featured_image} != '' — Airtable can't compare attachment
+// fields to strings; that condition always evaluated false, silently skipping
+// every record. Image presence is now checked in JS after fetching.
 async function getArticlesToPublish() {
   return new Promise((resolve, reject) => {
     const records = [];
@@ -141,8 +148,7 @@ async function getArticlesToPublish() {
           {post_to_wordpress} = TRUE(),
           IS_BEFORE({Publication Date}, DATEADD(TODAY(), 1, 'days')),
           {Plantz URL} = '',
-          {written_article} != '',
-          {featured_image} != ''
+          {written_article} != ''
         )`
       })
       .eachPage((pageRecords, next) => { records.push(...pageRecords); next(); }, (err) => err ? reject(err) : resolve(records));
@@ -150,16 +156,25 @@ async function getArticlesToPublish() {
 }
 
 async function main() {
-  console.log('🚀 Plantz WordPress Publisher v3 starting...');
+  console.log('🚀 Plantz WordPress Publisher v3.1 starting...');
   console.log(`Timestamp: ${new Date().toISOString()}\n`);
-  
+
   try {
     const articles = await getArticlesToPublish();
-    console.log(`📋 Found ${articles.length} article(s) ready to publish\n`);
+    console.log(`📋 Found ${articles.length} article(s) ready to publish`);
+
     if (articles.length === 0) {
       console.log('📭 No articles ready to publish today. Exiting.');
       return;
     }
+
+    // Log each candidate with key field status for easier debugging
+    for (const record of articles) {
+      const images = record.get('featured_image');
+      console.log(`   • "${record.get('article_title')}"`);
+      console.log(`     pipeline_status: ${record.get('pipeline_status') || '(none)'} | featured_image: ${images?.length > 0 ? 'YES' : 'MISSING'} | pub_date: ${record.get('Publication Date') || '(none)'}`);
+    }
+    console.log('');
 
     let successCount = 0;
     let errorCount = 0;
@@ -171,16 +186,20 @@ async function main() {
         let mediaId = null;
         const images = record.get('featured_image');
         if (images?.length > 0) {
-          console.log('   📸 Uploading image...');
+          console.log('   📸 Uploading featured image...');
           mediaId = await uploadFeaturedImage(images[0].url, title);
+          console.log(`   📸 Uploaded, media ID: ${mediaId}`);
+        } else {
+          console.log('   ⚠️  No featured image — publishing without one');
         }
+
         const categoryIds = await getCategoryIds(record.get('categories') || []);
         const tagIds = await getTagIds(record.get('claude_tags') || '');
         const post = await createWordPressPost(
           { title, written_article: record.get('written_article'), excerpt: record.get('claude_post_extract') },
           mediaId, categoryIds, tagIds
         );
-        
+
         // Update Airtable: save URL + set pipeline_status to published
         await new Promise((resolve, reject) => {
           airtable(CONFIG.airtable.tableId).update(record.id, {
@@ -188,7 +207,7 @@ async function main() {
             'pipeline_status': 'published'
           }, (err) => err ? reject(err) : resolve());
         });
-        
+
         await sendDiscordNotification(`**${title}**\n\n🔗 ${post.link}`);
         successCount++;
         console.log(`   ✅ Published: ${post.link}\n`);
