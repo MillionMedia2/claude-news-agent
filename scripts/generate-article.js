@@ -1,13 +1,14 @@
 /**
- * Plantz News Agent - Article Generation Script (v4.1)
+ * Plantz News Agent - Article Generation Script (v4.2)
+ *
+ * v4.2 fix:
+ *   - VALID_CATEGORIES updated to the exact choices from the Airtable
+ *     categories field (fetched via describe_table). Previous list had
+ *     "Women's Health" and "Devices" which don't exist in Airtable,
+ *     causing "Insufficient permissions to create new select option" errors.
  *
  * v4.1 fix:
- *   - Sanitise categories before writing to Airtable. Claude occasionally
- *     returns values not in the select field (e.g. "Women's Health" vs
- *     "Women's Health", or entirely new strings). Airtable rejects these
- *     with "Insufficient permissions to create new select option", crashing
- *     the article write. Now filters against VALID_CATEGORIES and falls back
- *     to "Health" if nothing matches.
+ *   - Sanitise categories before writing to Airtable.
  *
  * v4.0 changes:
  *   - Namespace routing per article angle
@@ -24,17 +25,28 @@ import Anthropic from '@anthropic-ai/sdk';
 import Airtable from 'airtable';
 
 // ── Valid Airtable category options ────────────────────────────────────────
-// Keep this in sync with the actual select options in the Articles table.
-// Any value Claude returns that isn't in this list gets dropped.
+// Exact choices from the Articles table categories field.
+// To update: check the field config in Airtable and keep this in sync.
 const VALID_CATEGORIES = new Set([
-  'Natural Remedies',
+  'Community',
+  'Members',
+  'Events',
   'Health',
-  'Research',
-  'Lifestyle',
-  'Medical Cannabis',
-  "Women's Health",
-  'Devices',
+  'ADHD',
+  'Anxiety',
   'Chronic Pain',
+  'Endometriosis',
+  'Insomnia',
+  'PTSD',
+  'Industry',
+  'Clinics',
+  'Pharmacies',
+  'Suppliers',
+  'Lifestyle',
+  'Natural Remedies',
+  'Medical Cannabis',
+  'Products',
+  'Research',
 ]);
 
 function sanitiseCategories(raw) {
@@ -512,10 +524,10 @@ Generate the following in JSON format:
   "claude_long_social": "5-6 post thread, separated by newlines, educational not salesy",
   "claude_avatar_script": "75-100 word video script teaser, tone-matched to persona",
   "claude_image_prompt": "image prompt for 16:9 featured image. For herbal/wellness content use: minimalist natural aesthetic, earth tones, Kinfolk magazine feel. For cannabis/clinical content use: clean, clinical, premium, blue/green palette. For device content use: clean product photography, neutral background.",
-  "categories": ["array of 1-3 values chosen ONLY from this exact list: ${validList}"]
+  "categories": ["1-3 values chosen ONLY from this exact list: ${validList}"]
 }
 
-IMPORTANT: The categories array must only contain values from the exact list above. Do not invent new category names.
+CRITICAL: The categories array must ONLY contain values copied exactly from the list above. Do not create, modify, or abbreviate any category name.
 
 Tone: ${personaNote}
 
@@ -563,7 +575,7 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('🚀 Plantz News Agent v4.1 starting...');
+  console.log('🚀 Plantz News Agent v4.2 starting...');
   console.log(`Timestamp: ${new Date().toISOString()}`);
   console.log(`Max articles per run: ${CONFIG.maxArticlesPerRun}\n`);
 
