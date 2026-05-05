@@ -1,21 +1,12 @@
 /**
- * Plantz News Agent - Article Generation Script (v4.2)
+ * Plantz News Agent - Article Generation Script (v4.3)
  *
- * v4.2 fix:
- *   - VALID_CATEGORIES updated to the exact choices from the Airtable
- *     categories field (fetched via describe_table). Previous list had
- *     "Women's Health" and "Devices" which don't exist in Airtable,
- *     causing "Insufficient permissions to create new select option" errors.
+ * v4.3: Added "Women's Health" and "Devices" to VALID_CATEGORIES
+ *       (now present in Airtable).
  *
- * v4.1 fix:
- *   - Sanitise categories before writing to Airtable.
- *
- * v4.0 changes:
- *   - Namespace routing per article angle
- *   - Multi-namespace evidence gathering
- *   - Persona-aware system prompts (Aisha, Chloe, David, Dr Carter)
- *   - Expanded angle handling
- *   - Women's Circle quote placeholder support
+ * v4.2 fix: VALID_CATEGORIES updated to exact Airtable select options.
+ * v4.1 fix: Sanitise categories before writing to Airtable.
+ * v4.0: Namespace routing, persona-aware prompts, Women's Circle placeholder.
  *
  * Env vars: ANTHROPIC_API_KEY, AIRTABLE_API_KEY, PINECONE_API_KEY,
  *           DISCORD_WEBHOOK_NOTIFICATIONS
@@ -47,6 +38,8 @@ const VALID_CATEGORIES = new Set([
   'Medical Cannabis',
   'Products',
   'Research',
+  "Women's Health",
+  'Devices',
 ]);
 
 function sanitiseCategories(raw) {
@@ -575,7 +568,7 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('🚀 Plantz News Agent v4.2 starting...');
+  console.log('🚀 Plantz News Agent v4.3 starting...');
   console.log(`Timestamp: ${new Date().toISOString()}`);
   console.log(`Max articles per run: ${CONFIG.maxArticlesPerRun}\n`);
 
