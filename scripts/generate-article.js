@@ -1,23 +1,20 @@
 /**
- * Plantz News Agent - Article Generation Script (v4.0)
+ * Plantz News Agent - Article Generation Script (v4.1)
+ *
+ * v4.1 fix:
+ *   - Sanitise categories before writing to Airtable. Claude occasionally
+ *     returns values not in the select field (e.g. "Women's Health" vs
+ *     "Women's Health", or entirely new strings). Airtable rejects these
+ *     with "Insufficient permissions to create new select option", crashing
+ *     the article write. Now filters against VALID_CATEGORIES and falls back
+ *     to "Health" if nothing matches.
  *
  * v4.0 changes:
- *   - Namespace routing: evidence is now pulled from the SPECIFIC Pinecone
- *     namespace(s) appropriate to the article's angle (read from Airtable
- *     fields `pinecone_namespaces` if present, otherwise inferred from angle).
- *   - Multi-namespace evidence: articles that blend cannabis + herbs (e.g.
- *     women's health) now pull from both relevant namespaces.
- *   - Persona-aware system prompts: writer tone switches between Aisha
- *     (herbs/wellness), Chloe (FAQ/new cannabis patient), David (device
- *     buying-intent, deep cannabis science), and Dr Carter (clinical).
- *   - Expanded angle handling for: cannabis_condition, faq_deep_dive,
- *     buying_intent_device, womens_health, plus legacy angles.
- *   - Honours the Women's Circle quote placeholder — if the prompt contains
- *     [WOMENS_CIRCLE_QUOTE_PLACEHOLDER: ...], the article is written with
- *     a visible [QUOTE TBC: ...] marker that editorial can fill in.
- *
- * v3.4 legacy: full Aisha persona + UK regulatory compliance + Yoast targets.
- * v3.2–3.3: claim-first duplicate prevention retained.
+ *   - Namespace routing per article angle
+ *   - Multi-namespace evidence gathering
+ *   - Persona-aware system prompts (Aisha, Chloe, David, Dr Carter)
+ *   - Expanded angle handling
+ *   - Women's Circle quote placeholder support
  *
  * Env vars: ANTHROPIC_API_KEY, AIRTABLE_API_KEY, PINECONE_API_KEY,
  *           DISCORD_WEBHOOK_NOTIFICATIONS
@@ -25,6 +22,26 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import Airtable from 'airtable';
+
+// ── Valid Airtable category options ────────────────────────────────────────
+// Keep this in sync with the actual select options in the Articles table.
+// Any value Claude returns that isn't in this list gets dropped.
+const VALID_CATEGORIES = new Set([
+  'Natural Remedies',
+  'Health',
+  'Research',
+  'Lifestyle',
+  'Medical Cannabis',
+  "Women's Health",
+  'Devices',
+  'Chronic Pain',
+]);
+
+function sanitiseCategories(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return ['Health'];
+  const valid = raw.filter(c => VALID_CATEGORIES.has(c));
+  return valid.length > 0 ? valid : ['Health'];
+}
 
 // Configuration
 const CONFIG = {
@@ -34,20 +51,18 @@ const CONFIG = {
   },
   pinecone: {
     host: 'https://plantz1-aokppsg.svc.gcp-europe-west4-de1d.pinecone.io',
-    // Namespaces available in the plantz1 index
     namespaces: {
-      products:       'plantz-products',
-      herbs:          'herb_monographs',
-      cannabisFaq:    'cannabis_faq',
-      cannabis:       'cannabis',
-      cannabisProd:   'cannabis_products',
-      naturalRem:     'natural_remedies'
+      products:    'plantz-products',
+      herbs:       'herb_monographs',
+      cannabisFaq: 'cannabis_faq',
+      cannabis:    'cannabis',
+      cannabisProd:'cannabis_products',
+      naturalRem:  'natural_remedies'
     }
   },
   maxArticlesPerRun: 10
 };
 
-// Initialize clients
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const airtable = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY }).base(CONFIG.airtable.baseId);
 
@@ -133,37 +148,19 @@ async function getQueuedArticles() {
 
 // ── Angle → Namespace Routing ──────────────────────────────────────────────
 
-/**
- * Map an article's angle to the Pinecone namespaces that hold the most
- * relevant evidence. Returns an array of namespace strings.
- */
 function namespacesForAngle(angle) {
   const ns = CONFIG.pinecone.namespaces;
   switch (angle) {
-    case 'product_deep_dive':
-      return [ns.products, ns.herbs, ns.naturalRem];
-    case 'cannabis_condition':
-      return [ns.cannabis, ns.cannabisFaq, ns.cannabisProd];
-    case 'faq_deep_dive':
-      return [ns.cannabisFaq, ns.cannabis];
-    case 'womens_health':
-      // Blend both worlds — cannabis + herbal + broad natural remedies
-      return [ns.cannabis, ns.naturalRem, ns.herbs, ns.cannabisFaq];
-    case 'buying_intent_device':
-      return [ns.products, ns.cannabisProd];
+    case 'product_deep_dive':    return [ns.products, ns.herbs, ns.naturalRem];
+    case 'cannabis_condition':   return [ns.cannabis, ns.cannabisFaq, ns.cannabisProd];
+    case 'faq_deep_dive':        return [ns.cannabisFaq, ns.cannabis];
+    case 'womens_health':        return [ns.cannabis, ns.naturalRem, ns.herbs, ns.cannabisFaq];
+    case 'buying_intent_device': return [ns.products, ns.cannabisProd];
     case 'research_roundup':
     case 'mechanism_explainer':
-    case 'myth_busting':
-      return [ns.herbs, ns.naturalRem, ns.cannabis];
-    case 'industry_story':
-      return [ns.cannabis, ns.cannabisFaq];
-    case 'seasonal':
-    case 'beginners_guide':
-    case 'safety_deep_dive':
-    case 'comparison':
-    case 'deep_dive':
-    default:
-      return [ns.herbs, ns.naturalRem, ns.products];
+    case 'myth_busting':         return [ns.herbs, ns.naturalRem, ns.cannabis];
+    case 'industry_story':       return [ns.cannabis, ns.cannabisFaq];
+    default:                     return [ns.herbs, ns.naturalRem, ns.products];
   }
 }
 
@@ -197,34 +194,22 @@ async function searchNamespace(namespace, searchText, topK = 8) {
   }
 }
 
-/**
- * Build an evidence block by querying multiple namespaces. If the Airtable
- * record carried explicit pinecone_namespaces and pinecone_queries (from the
- * v2.0 headline generator), use those. Otherwise fall back to angle routing
- * and a generic title+prompt query.
- */
 async function gatherEvidence(record) {
   const title = record.get('article_title') || '';
   const prompt = record.get('prompt') || '';
   const angle = record.get('angle') || '';
   const subject = record.get('subject') || '';
 
-  // Prefer explicit namespace instructions from the headline brief
   let namespaces = [];
   const explicitNs = record.get('pinecone_namespaces');
   if (explicitNs) {
-    // Airtable may store as string or array; handle both
     namespaces = Array.isArray(explicitNs)
       ? explicitNs
       : String(explicitNs).split(',').map(s => s.trim()).filter(Boolean);
   }
-  if (namespaces.length === 0) {
-    namespaces = namespacesForAngle(angle);
-  }
-  // Dedupe
+  if (namespaces.length === 0) namespaces = namespacesForAngle(angle);
   namespaces = [...new Set(namespaces)];
 
-  // Prefer explicit queries; otherwise derive from title/subject/prompt
   let queries = [];
   const explicitQueries = record.get('pinecone_queries');
   if (explicitQueries) {
@@ -233,9 +218,10 @@ async function gatherEvidence(record) {
       : String(explicitQueries).split('\n').map(s => s.trim()).filter(Boolean);
   }
   if (queries.length === 0) {
-    const primary = `${subject} ${title}`.substring(0, 200).trim();
-    const secondary = prompt.substring(0, 300).trim();
-    queries = [primary, secondary].filter(Boolean);
+    queries = [
+      `${subject} ${title}`.substring(0, 200).trim(),
+      prompt.substring(0, 300).trim()
+    ].filter(Boolean);
   }
 
   console.log(`   📚 Querying ${namespaces.length} namespace(s) with ${queries.length} query/queries`);
@@ -247,10 +233,7 @@ async function gatherEvidence(record) {
     for (const q of queries) {
       const hits = await searchNamespace(ns, q, 5);
       for (const hit of hits) {
-        const text = hit.fields?.text
-          || hit.fields?.answer_summary
-          || hit.fields?.question
-          || '';
+        const text = hit.fields?.text || hit.fields?.answer_summary || hit.fields?.question || '';
         if (!text || text.length < 40) continue;
         const key = text.substring(0, 100);
         if (seenTexts.has(key)) continue;
@@ -263,11 +246,7 @@ async function gatherEvidence(record) {
     if (blocks.length >= 18) break;
   }
 
-  return {
-    evidence: blocks.join('\n\n---\n\n'),
-    namespacesUsed: namespaces,
-    chunkCount: blocks.length
-  };
+  return { evidence: blocks.join('\n\n---\n\n'), namespacesUsed: namespaces, chunkCount: blocks.length };
 }
 
 // ── System Prompts (Persona-aware) ─────────────────────────────────────────
@@ -416,9 +395,7 @@ The Women's Circle video transcript corpus is not yet available to you. You MUST
 1. Preserve the hook by inserting a visible editorial marker at the natural quote location.
 2. Format it as a blockquote:
    > [QUOTE TBC — insert a Women's Circle quote on {topic} here; editorial to source from video transcripts before publication]
-3. Write the surrounding paragraph so it still reads well if the quote were removed — the quote should enhance the point, not carry it.
-
-This marker will be spotted in review and replaced manually (or by a later retrieval step once transcripts are ingested).`;
+3. Write the surrounding paragraph so it still reads well if the quote were removed — the quote should enhance the point, not carry it.`;
 
 const FINAL_CHECK_BLOCK = `## FINAL SELF-CHECK (apply before finishing)
 
@@ -434,9 +411,6 @@ Before outputting, verify:
 - If the brief contained a Women's Circle placeholder, is the [QUOTE TBC — …] marker in place?
 - Does this feel authentic to the target persona?`;
 
-/**
- * Build the persona block string for a given persona key.
- */
 function personaBlock(personaKey) {
   switch ((personaKey || '').toLowerCase()) {
     case 'chloe':     return CHLOE_PERSONA_BLOCK;
@@ -448,9 +422,6 @@ function personaBlock(personaKey) {
   }
 }
 
-/**
- * Build the full system prompt for a given article.
- */
 function buildSystemPrompt(persona, angle) {
   const anglePrefix = (() => {
     switch (angle) {
@@ -485,7 +456,6 @@ function buildSystemPrompt(persona, angle) {
 
 async function generateArticle({ title, prompt, evidence, persona, angle }) {
   const systemPrompt = buildSystemPrompt(persona, angle);
-
   const userPrompt = `Write an article titled: "${title}"
 
 ## Research Brief:
@@ -522,6 +492,8 @@ async function generateSupportingContent(article, title, persona, angle) {
     ? 'Warm, reassuring, plain-English.'
     : 'Warm, evidence-led Aisha tone.';
 
+  const validList = [...VALID_CATEGORIES].join(', ');
+
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 2000,
@@ -540,8 +512,10 @@ Generate the following in JSON format:
   "claude_long_social": "5-6 post thread, separated by newlines, educational not salesy",
   "claude_avatar_script": "75-100 word video script teaser, tone-matched to persona",
   "claude_image_prompt": "image prompt for 16:9 featured image. For herbal/wellness content use: minimalist natural aesthetic, earth tones, Kinfolk magazine feel. For cannabis/clinical content use: clean, clinical, premium, blue/green palette. For device content use: clean product photography, neutral background.",
-  "categories": ["array of 1-3 from: Natural Remedies, Health, Research, Lifestyle, Medical Cannabis, Women's Health, Devices"]
+  "categories": ["array of 1-3 values chosen ONLY from this exact list: ${validList}"]
 }
+
+IMPORTANT: The categories array must only contain values from the exact list above. Do not invent new category names.
 
 Tone: ${personaNote}
 
@@ -564,6 +538,9 @@ Return ONLY valid JSON, no markdown.`
 // ── Airtable Update ────────────────────────────────────────────────────────
 
 async function updateAirtableRecord(recordId, article, supportingContent) {
+  const categories = sanitiseCategories(supportingContent.categories);
+  console.log(`   Categories: ${categories.join(', ')}`);
+
   return new Promise((resolve, reject) => {
     airtable(CONFIG.airtable.tableId).update(recordId, {
       'written_article': article,
@@ -574,7 +551,7 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
       'claude_long_social': supportingContent.claude_long_social || '',
       'claude_avatar_script': supportingContent.claude_avatar_script || '',
       'claude_image_prompt': supportingContent.claude_image_prompt || '',
-      'categories': supportingContent.categories || ['Natural Remedies'],
+      'categories': categories,
       'article_source_name': 'Plantz News Agent (GitHub Actions)'
     }, (err, record) => {
       if (err) reject(err);
@@ -586,7 +563,7 @@ async function updateAirtableRecord(recordId, article, supportingContent) {
 // ── Main ───────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('🚀 Plantz News Agent v4.0 starting...');
+  console.log('🚀 Plantz News Agent v4.1 starting...');
   console.log(`Timestamp: ${new Date().toISOString()}`);
   console.log(`Max articles per run: ${CONFIG.maxArticlesPerRun}\n`);
 
@@ -642,7 +619,7 @@ async function main() {
           `**${title}**\n\n` +
           `Angle: ${angle || 'general'} | Persona: ${persona || 'aisha'}\n` +
           `Evidence: ${chunkCount} chunks from ${namespacesUsed.length} namespace(s)\n` +
-          `Categories: ${(supportingContent.categories || []).join(', ')}\n\n` +
+          `Categories: ${sanitiseCategories(supportingContent.categories).join(', ')}\n\n` +
           `_Review in Airtable, upload a featured image, set a Publication Date, and tick ☑ post_to_wordpress._`
         );
 
