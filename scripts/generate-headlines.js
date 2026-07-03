@@ -530,7 +530,7 @@ FINAL REQUIREMENTS
 
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 8000,
+    max_tokens: 16000,
     messages: [{ role: 'user', content: userPrompt }],
     system: systemPrompt
   });
@@ -539,7 +539,14 @@ FINAL REQUIREMENTS
   if (jsonStr.includes('```json')) jsonStr = jsonStr.split('```json')[1].split('```')[0];
   else if (jsonStr.includes('```')) jsonStr = jsonStr.split('```')[1].split('```')[0];
 
-  return JSON.parse(jsonStr.trim());
+  jsonStr = jsonStr.trim();
+
+  try {
+    return JSON.parse(jsonStr);
+  } catch (parseError) {
+    const snippet = jsonStr.substring(0, 500);
+    throw new Error(`${parseError.message}\n\nRaw response (first 500 chars):\n${snippet}`);
+  }
 }
 
 // ── Airtable: Create Headlines ─────────────────────────────────────────────
