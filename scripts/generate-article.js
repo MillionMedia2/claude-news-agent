@@ -481,7 +481,7 @@ STRICT REQUIREMENTS for this article:
 Generate the complete article now.`;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 4000,
     messages: [{ role: 'user', content: userPrompt }],
     system: systemPrompt
@@ -500,7 +500,7 @@ async function generateSupportingContent(article, title, persona, angle) {
   const validList = [...VALID_CATEGORIES].join(', ');
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 2000,
     messages: [{
       role: 'user',
